@@ -4,6 +4,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import subprocess
 import tempfile
 import uuid
 from contextlib import contextmanager
@@ -30,6 +31,39 @@ def _event(action: str, detail: str | None = None) -> dict:
     if detail:
         item["detail"] = detail[:1000]
     return item
+
+
+def _find_task_commit(workspace: str, task_id: str) -> tuple[str, str] | None:
+    """Find a committed coding result even if the worker died before queue checkpointing."""
+    try:
+        root = Path(workspace).expanduser().resolve()
+        if not root.is_dir():
+            return None
+        log = subprocess.run(
+            ["git", "log", "--all", "--format=%H%x09%B"],
+            cwd=root, capture_output=True, text=True, timeout=10, check=False,
+        )
+        if log.returncode:
+            return None
+        trailer = f"Coding-Agent-Task: {task_id}"
+        for entry in log.stdout.split("\\n\\n"):
+            header, separator, body = entry.partition("\\t")
+            if not separator or not header.strip():
+                continue
+            if trailer not in {line.strip() for line in body.splitlines()}:
+                continue
+            commit = header.strip().splitlines()[-1]
+            branches = subprocess.run(
+                ["git", "for-each-ref", "--contains", commit,
+                 "--format=%(refname:short)", "refs/heads/agent/task-*"],
+                cwd=root, capture_output=True, text=True, timeout=10, check=False,
+            )
+            branch = next((line.strip() for line in branches.stdout.splitlines()
+                           if line.strip()), "unknown")
+            return commit, branch
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    return None
 
 
 @dataclass
@@ -475,7 +509,23 @@ class TaskQueue:
                      if event.get("action") == "verified_commit"),
                     None,
                 )
-                if verified_commit and item.get("result"):
+                committed = (
+                    _find_task_commit(item["workspace"], item["id"])
+                    if item.get("kind") == "code" else None
+                )
+                if committed:
+                    commit, branch = committed
+                    checkpoint = (
+                        f"Recovered verified commit from Git history.\\n"
+                        f"Branch: {branch}\\nCommit: {commit}\\n"
+                        "Verification: commit was created by the coding engine after verification."
+                    )
+                    item["result"] = ((item.get("result") or "").rstrip()
+                                      + "\\n" + checkpoint).strip()
+                    item["status"] = "succeeded"
+                    item["error"] = None
+                    detail = "Recovered successful coding task from its stable Git commit identifier."
+                elif verified_commit and item.get("result"):
                     # A coding worker can die after its verified commit is saved
                     # but before the queue transition. Do not execute it again.
                     item["status"] = "succeeded"
