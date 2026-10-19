@@ -188,3 +188,37 @@ def test_purge_failed_clears_saved_failure_details_from_retryable_tasks(tmp_path
     assert cleaned.error is None
     assert all(event["action"] != "failed" for event in cleaned.history)
 
+
+
+def test_adaptive_plan_replaces_only_pending_tail_after_success(tmp_path):
+    queue = TaskQueue(tmp_path / "tasks.json")
+    original = queue.enqueue_plan(
+        "Improve parser", tmp_path, ["Inspect parser", "Implement fix", "Add tests"],
+        adaptive=True, allowed_paths=["parser.py", "tests/test_parser.py"],
+    )
+    first = queue.claim_next(kind="code")
+    assert first.id == original[0].id
+    completed = queue.complete(first.id, result="Parser inspected; fix is smaller than expected.")
+
+    revised = queue.revise_pending_plan(completed.id, ["Fix parser edge case", "Add focused regression test"])
+
+    all_tasks = queue.list_tasks()
+    assert [task.id for task in revised] == [task.id for task in all_tasks if task.status == "pending"]
+    assert [task.step_index for task in revised] == [2, 3]
+    assert revised[0].depends_on == completed.id
+    assert revised[1].depends_on == revised[0].id
+    assert all(task.adaptive_plan for task in revised)
+    assert all(task.plan_objective == "Improve parser" for task in revised)
+    assert all(task.allowed_paths == ["parser.py", "tests/test_parser.py"] for task in revised)
+    assert all("Inspect parser" not in task.prompt for task in revised)
+
+
+def test_adaptive_plan_can_finish_early_by_removing_remaining_steps(tmp_path):
+    queue = TaskQueue(tmp_path / "tasks.json")
+    tasks = queue.enqueue_plan("Inspect app", tmp_path, ["Inspect", "Fix", "Test"], adaptive=True)
+    queue.claim_next(kind="code")
+    completed = queue.complete(tasks[0].id, result="Objective already satisfied.")
+
+    assert queue.revise_pending_plan(completed.id, []) == []
+    assert queue.list_tasks(status="pending") == []
+    assert len(queue.list_tasks(status="succeeded")) == 1
