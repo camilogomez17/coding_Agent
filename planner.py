@@ -78,15 +78,15 @@ def adapt_completed_step(
         key=lambda task: task.step_index or 0,
     )
     client = model_client or ModelClient()
-    remaining = "\\n".join(
+    remaining = "\n".join(
         f"{task.step_index}. {task.prompt.splitlines()[-2]}"
         for task in pending
     ) or "(none)"
     prompt = (
-        f"Overall objective: {completed_task.plan_objective}\\n\\n"
-        f"Completed step: {completed_task.prompt}\\n"
-        f"Verified result: {result[:8000]}\\n\\n"
-        f"Previously planned remaining steps:\\n{remaining}\\n\\n"
+        f"Overall objective: {completed_task.plan_objective}\n\n"
+        f"Completed step: {completed_task.prompt}\n"
+        f"Verified result: {result[:8000]}\n\n"
+        f"Previously planned remaining steps:\n{remaining}\n\n"
         "Evaluate what is actually complete, what remains, and whether the plan should change. "
         "Return JSON with a steps list containing only the revised remaining work."
     )
