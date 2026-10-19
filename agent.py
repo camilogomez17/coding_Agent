@@ -64,6 +64,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--publish", action="store_true",
         help="Publish each verified plan step as a pull request (requires git remote origin and authenticated gh CLI).",
     )
+    plan_parser.add_argument(
+        "--allow-path", action="append", default=[],
+        help="Restrict every planned step to this exact relative path; repeat to allow multiple files.",
+    )
     plan_parser.add_argument("objective", nargs="+")
 
     list_parser = task_commands.add_parser("list", help="List queued tasks.")
@@ -163,7 +167,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.task_command == "plan":
             tasks = plan_objective(
-                queue, args.workspace, " ".join(args.objective), publish=args.publish
+                queue, args.workspace, " ".join(args.objective), publish=args.publish,
+                allowed_paths=args.allow_path or None,
             )
             print(f"Created plan {tasks[0].plan_id} with {len(tasks)} dependent coding steps.")
             for task in tasks:
