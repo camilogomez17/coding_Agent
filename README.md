@@ -86,10 +86,11 @@ Plan a high-level coding objective into ordered, dependent tasks:
 ```bash
 python agent.py task plan --workspace /path/to/project "Add import sorting and tests"
 python agent.py task plan --workspace /path/to/project --publish "Add import sorting and tests"
+python agent.py task plan --workspace /path/to/project --allow-path parser.py --allow-path tests/test_parser.py "Improve the parser"
 python agent.py task list
 ```
 
-The planner uses the configured model to produce 2-8 bounded steps. Steps are queued atomically and executed in order. A step does not become eligible until its predecessor succeeds; a permanently failed prerequisite blocks later steps. Review generated plans before letting them run.
+The planner uses the configured model to produce 2-8 bounded steps. Repeat `--allow-path` to enforce the same exact relative-path allowlist on every generated step. Steps are queued atomically and executed in order. A step does not become eligible until its predecessor succeeds; a permanently failed prerequisite blocks later steps. Review generated plans before letting them run.
 
 Start the persistent supervisor:
 
