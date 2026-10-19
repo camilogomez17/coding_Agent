@@ -114,6 +114,24 @@ def test_recovery_finds_verified_commit_when_checkpoint_was_never_saved(tmp_path
     assert any(event["action"] == "recovered" for event in recovered.history)
 
 
+def test_publication_failure_preserves_verified_checkpoint_for_retry(tmp_path):
+    queue = TaskQueue(tmp_path / "tasks.json", max_attempts=3)
+    task = queue.enqueue("Implement feature", tmp_path, kind="code", publish=True)
+    queue.claim_next(kind="code")
+    report = (
+        "Summary: Implement feature\nBranch: agent/task-publish-retry\n"
+        "Base branch: main\nCommit: abc123\nChanged files: app.py"
+    )
+    queue.annotate_task(task.id, report, action="verified_commit")
+
+    retried = queue.fail(task.id, "Publication failed: network unavailable", retry=True)
+
+    assert retried.status == "pending"
+    assert report in retried.result
+    assert retried.error == "Publication failed: network unavailable"
+    assert any(event["action"] == "verified_commit" for event in retried.history)
+
+
 def test_recovery_requeues_publication_for_verified_commit(tmp_path):
     import subprocess
 
