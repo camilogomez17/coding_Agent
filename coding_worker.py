@@ -47,6 +47,7 @@ def run_next_coding_task(
                 allowed_paths=task.allowed_paths or None,
                 base_branch_override=base_branch,
                 on_verified_commit=checkpoint_verified_commit,
+                task_id=task.id,
             )
             report = (
                 f"Summary: {result.summary}\n"
