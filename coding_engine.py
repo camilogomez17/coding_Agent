@@ -327,6 +327,7 @@ def run_coding_task(
     *,
     max_attempts: int = MAX_ATTEMPTS,
     allowed_paths: list[str] | tuple[str, ...] | set[str] | None = None,
+    base_branch_override: str | None = None,
 ) -> CodingResult:
     """Propose, validate, test, and commit changes on a newly-created Git branch."""
     if not isinstance(prompt, str) or not prompt.strip():
@@ -350,11 +351,16 @@ def run_coding_task(
         raise CodingEngineError(
             "Workspace must have a clean Git working tree before coding."
         )
-    if not _git(root, "branch", "--show-current").stdout.strip():
-        raise CodingEngineError("Detached HEAD is not supported.")
-    base_branch = _git(root, "branch", "--show-current").stdout.strip()
+    current_branch = _git(root, "branch", "--show-current").stdout.strip()
+    if not current_branch and not base_branch_override:
+        raise CodingEngineError(
+            "Detached HEAD requires an explicit base_branch_override."
+        )
+    base_branch = base_branch_override or current_branch
     if not base_branch:
         raise CodingEngineError("Could not determine the current base branch.")
+    if base_branch_override:
+        _git(root, "show-ref", "--verify", f"refs/heads/{base_branch}")
     # Initialize the model client before creating a task branch. Configuration
     # errors should not leave an abandoned branch behind.
     client = model_client or ModelClient()
