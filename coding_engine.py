@@ -329,6 +329,7 @@ def run_coding_task(
     allowed_paths: list[str] | tuple[str, ...] | set[str] | None = None,
     base_branch_override: str | None = None,
     on_verified_commit: Callable[[CodingResult], None] | None = None,
+    task_id: str | None = None,
 ) -> CodingResult:
     """Propose, validate, test, and commit changes on a newly-created Git branch."""
     if not isinstance(prompt, str) or not prompt.strip():
@@ -422,7 +423,12 @@ def run_coding_task(
                 re.sub(r"\s+", " ", summary).strip()[:60]
                 or re.sub(r"\s+", " ", prompt.strip())[:60]
             )
-            _git(root, "commit", "-m", f"agent: {subject}")
+            commit_args = ["commit", "-m", f"agent: {subject}"]
+            if task_id:
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
+                    raise CodingEngineError("task_id must contain only letters, digits, underscores, or hyphens.")
+                commit_args.extend(["-m", f"Coding-Agent-Task: {task_id}"])
+            _git(root, *commit_args)
             commit = _git(root, "rev-parse", "HEAD").stdout.strip()
             result = CodingResult(
                 branch,
