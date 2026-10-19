@@ -159,3 +159,20 @@ def test_task_code_runs_one_queued_coding_task(tmp_path, monkeypatch, capsys):
     assert seen["queue"].__class__ is TaskQueue
     assert "Coding report" in output
     assert "agent/task-example" in output
+
+def test_task_add_persists_explicit_allowed_paths(tmp_path, monkeypatch, capsys):
+    queue_path = tmp_path / "tasks.json"
+    monkeypatch.setenv("AGENT_QUEUE_PATH", str(queue_path))
+
+    result = agent.main([
+        "task", "add", "--workspace", str(tmp_path), "--mode", "code",
+        "--allow-path", "coding_engine.py",
+        "--allow-path", "tests/test_coding_engine.py",
+        "Improve", "failure", "recovery",
+    ])
+
+    assert result == 0
+    assert "Queued task" in capsys.readouterr().out
+    task = TaskQueue(queue_path).list_tasks()[0]
+    assert task.allowed_paths == ["coding_engine.py", "tests/test_coding_engine.py"]
+
