@@ -237,7 +237,7 @@ class TaskQueue:
                 if item["id"] != task_id:
                     continue
                 item["result"] = ((item.get("result") or "").rstrip()
-                                  + "\\n" + detail.strip()[:1000]).strip()
+                                  + "\n" + detail.strip()[:1000]).strip()
                 item["updated_at"] = _now()
                 item.setdefault("history", []).append(_event(action, detail))
                 self._save(data)
@@ -469,14 +469,28 @@ class TaskQueue:
             for item in data["tasks"]:
                 if item["status"] != "running":
                     continue
-                if item["attempts"] < self.max_attempts:
+                events = item.setdefault("history", [])
+                verified_commit = next(
+                    (event for event in reversed(events)
+                     if event.get("action") == "verified_commit"),
+                    None,
+                )
+                if verified_commit and item.get("result"):
+                    # A coding worker can die after its verified commit is saved
+                    # but before the queue transition. Do not execute it again.
+                    item["status"] = "succeeded"
+                    item["error"] = None
+                    detail = "Recovered completed coding task from its verified-commit checkpoint."
+                elif item["attempts"] < self.max_attempts:
                     item["status"] = "pending"
                     item["error"] = "Requeued after an interrupted run."
+                    detail = item["error"]
                 else:
                     item["status"] = "failed"
                     item["error"] = "Retry limit reached after an interrupted run."
+                    detail = item["error"]
                 item["updated_at"] = _now()
-                item.setdefault("history", []).append(_event("recovered", item["error"]))
+                events.append(_event("recovered", detail))
                 recovered += 1
             if recovered:
                 self._save(data)
