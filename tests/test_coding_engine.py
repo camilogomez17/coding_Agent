@@ -93,9 +93,13 @@ def test_engine_commits_verified_changes_on_new_branch(tmp_path):
     result = run_coding_task(
         root, "Make answer return 2", model, max_attempts=2,
         on_verified_commit=checkpoints.append,
+        task_id="stable-task-123",
     )
 
     assert checkpoints == [result]
+    assert "Coding-Agent-Task: stable-task-123" in git(
+        root, "show", "-s", "--format=%B", result.commit
+    ).stdout
     assert "Test suite failed" in model.prompts[1][0]
     assert result.branch.startswith("agent/task-make-answer-return-2-")
     assert result.branch != "main"
