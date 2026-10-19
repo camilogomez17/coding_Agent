@@ -139,6 +139,7 @@ class ModelClient:
                 "model": self.config.local_model,
                 "messages": self._messages(prompt, system),
                 "stream": False,
+                "format": "json",
             },
         )
         message = response.get("message")
