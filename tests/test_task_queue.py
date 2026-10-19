@@ -75,6 +75,27 @@ def test_interrupted_task_is_requeued_after_restart(tmp_path):
     assert recovered.error == "Requeued after an interrupted run."
 
 
+def test_recovery_completes_task_with_verified_commit_checkpoint(tmp_path):
+    path = tmp_path / "tasks.json"
+    queue = TaskQueue(path, max_attempts=3)
+    task = queue.enqueue("Implement feature", tmp_path, kind="code")
+    claimed = queue.claim_next(kind="code")
+    assert claimed.id == task.id
+
+    report = "Summary: Implemented feature\nBranch: agent/task-implement-feature\nCommit: abc123"
+    queue.annotate_task(task.id, report, action="verified_commit")
+
+    restarted = TaskQueue(path, max_attempts=3)
+    assert restarted.recover_interrupted() == 1
+    recovered = restarted.list_tasks()[0]
+
+    assert recovered.status == "succeeded"
+    assert recovered.error is None
+    assert report in recovered.result
+    assert any(event["action"] == "verified_commit" for event in recovered.history)
+    assert any(event["action"] == "recovered" for event in recovered.history)
+
+
 def test_interrupted_task_at_attempt_limit_is_failed(tmp_path):
     queue = TaskQueue(tmp_path / "tasks.json", max_attempts=1)
     queue.enqueue("Interrupted work", tmp_path)
