@@ -266,7 +266,7 @@ def test_worker_recovers_crash_after_pr_creation_before_queue_completion(tmp_pat
         ),
     )
 
-    first = queue.claim_next(kind="code")
+    first = queue.list_tasks()[0]
     interrupted = coding_worker.run_next_coding_task(
         queue, model_client=object(), claimed_task=first
     )
