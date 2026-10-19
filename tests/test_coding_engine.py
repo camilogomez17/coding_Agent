@@ -107,6 +107,27 @@ def test_engine_commits_verified_changes_on_new_branch(tmp_path):
     assert git(root, "status", "--porcelain").stdout.strip() == ""
 
 
+def test_verified_commit_callback_failure_does_not_undo_successful_commit(tmp_path):
+    root = make_repo(tmp_path)
+    model = FakeModel(proposal(
+        "app.py",
+        "def answer():\n    \"\"\"Keep the expected answer.\"\"\"\n    return 1\n",
+        "Document answer",
+    ))
+
+    def broken_checkpoint(_result):
+        raise OSError("queue temporarily unavailable")
+
+    result = run_coding_task(
+        root, "Document answer", model, max_attempts=1,
+        on_verified_commit=broken_checkpoint,
+    )
+
+    assert git(root, "rev-parse", "HEAD").stdout.strip() == result.commit
+    assert git(root, "branch", "--show-current").stdout.strip() == result.branch
+    assert git(root, "status", "--porcelain").stdout.strip() == ""
+
+
 def test_engine_rejects_dirty_workspace_without_creating_branch(tmp_path):
     root = make_repo(tmp_path)
     (root / "app.py").write_text("dirty = True\n", encoding="utf-8")
