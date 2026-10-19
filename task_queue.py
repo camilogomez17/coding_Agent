@@ -527,6 +527,7 @@ class TaskQueue:
                     )
                     item["result"] = ((item.get("result") or "").rstrip()
                                       + "\n" + checkpoint).strip()
+                    events.append(_event("verified_commit", checkpoint))
                     item["status"] = "pending" if item.get("publish") else "succeeded"
                     item["error"] = None
                     detail = (
