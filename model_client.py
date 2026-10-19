@@ -3,6 +3,7 @@
 Hybrid mode tries the local model first and uses the configured cloud endpoint
 only when the local request fails. API keys are read from the environment.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,13 +35,19 @@ class ModelConfig:
         try:
             timeout = float(os.getenv("AGENT_MODEL_TIMEOUT", "120"))
         except ValueError as error:
-            raise ModelError("AGENT_MODEL_TIMEOUT must be a number of seconds.") from error
+            raise ModelError(
+                "AGENT_MODEL_TIMEOUT must be a number of seconds."
+            ) from error
 
         config = cls(
             mode=mode,
-            ollama_url=os.getenv("AGENT_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
+            ollama_url=os.getenv("AGENT_OLLAMA_URL", "http://127.0.0.1:11434").rstrip(
+                "/"
+            ),
             local_model=os.getenv("AGENT_LOCAL_MODEL", "qwen2.5-coder:7b"),
-            cloud_url=os.getenv("AGENT_CLOUD_URL", "https://api.openai.com/v1").rstrip("/"),
+            cloud_url=os.getenv("AGENT_CLOUD_URL", "https://api.openai.com/v1").rstrip(
+                "/"
+            ),
             cloud_model=os.getenv("AGENT_CLOUD_MODEL", "gpt-4.1-mini"),
             cloud_api_key=os.getenv("OPENAI_API_KEY") or None,
             timeout_seconds=timeout,
@@ -59,6 +66,29 @@ class ModelConfig:
             raise ModelError("AGENT_CLOUD_MODEL cannot be empty.")
         if self.mode == "cloud" and not self.cloud_api_key:
             raise ModelError("Cloud mode requires OPENAI_API_KEY to be set.")
+
+
+PROPOSAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "changes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    "required": ["summary", "changes"],
+}
 
 
 class ModelClient:
@@ -122,7 +152,9 @@ class ModelClient:
             # Do not include response bodies; providers can echo sensitive input.
             raise ModelError(f"Model endpoint returned HTTP {error.code}.") from error
         except (URLError, TimeoutError, OSError) as error:
-            raise ModelError(f"Could not reach model endpoint ({type(error).__name__}).") from error
+            raise ModelError(
+                f"Could not reach model endpoint ({type(error).__name__})."
+            ) from error
 
         try:
             decoded = json.loads(raw_body.decode("utf-8"))
@@ -139,7 +171,7 @@ class ModelClient:
                 "model": self.config.local_model,
                 "messages": self._messages(prompt, system),
                 "stream": False,
-                "format": "json",
+                "format": PROPOSAL_SCHEMA,
             },
         )
         message = response.get("message")
