@@ -113,6 +113,43 @@ def test_recovery_finds_verified_commit_when_checkpoint_was_never_saved(tmp_path
     assert any(event["action"] == "recovered" for event in recovered.history)
 
 
+def test_recovery_requeues_publication_for_verified_commit(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True,
+            capture_output=True, text=True,
+        )
+
+    git("init", "-b", "main")
+    git("config", "user.name", "Coding Agent Tests")
+    git("config", "user.email", "coding-agent-tests@example.invalid")
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    git("add", "app.py")
+    git("commit", "-m", "initial")
+
+    queue = TaskQueue(tmp_path / "tasks.json", max_attempts=3)
+    task = queue.enqueue("Implement feature", tmp_path, kind="code", publish=True)
+    queue.claim_next(kind="code")
+    git("switch", "-c", "agent/task-publish-recovery")
+    (tmp_path / "app.py").write_text("value = 2\n", encoding="utf-8")
+    git("add", "app.py")
+    git("commit", "-m", "agent: implement feature",
+        "-m", f"Coding-Agent-Task: {task.id}")
+    commit = git("rev-parse", "HEAD").stdout.strip()
+
+    restarted = TaskQueue(tmp_path / "tasks.json", max_attempts=3)
+    assert restarted.recover_interrupted() == 1
+    recovered = restarted.list_tasks()[0]
+
+    assert recovered.status == "pending"
+    assert recovered.publish is True
+    assert commit in recovered.result
+    assert any(event["action"] == "verified_commit" for event in recovered.history)
+    assert "publication must be retried" in recovered.history[-1]["detail"]
+
+
 def test_recovery_completes_task_with_verified_commit_checkpoint(tmp_path):
     path = tmp_path / "tasks.json"
     queue = TaskQueue(path, max_attempts=3)
