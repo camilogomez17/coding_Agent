@@ -119,12 +119,13 @@ def test_engine_rolls_back_when_all_attempts_fail(tmp_path):
         proposal("app.py", "def answer():\n    return 9\n"),
     )
 
-    with pytest.raises(CodingEngineError, match="failed after 2 attempt"):
+    with pytest.raises(CodingEngineError, match="returned to 'main'"):
         run_coding_task(root, "Break answer", model, max_attempts=2)
 
     assert (root / "app.py").read_text(encoding="utf-8") == before
     assert git(root, "status", "--porcelain").stdout.strip() == ""
-    assert git(root, "branch", "--show-current").stdout.strip().startswith("agent/task-break-answer-")
+    assert git(root, "branch", "--show-current").stdout.strip() == "main"
+    assert git(root, "branch", "--list", "agent/task-break-answer-*").stdout.strip() == ""
 
 
 def test_engine_refuses_more_than_three_attempts(tmp_path):
