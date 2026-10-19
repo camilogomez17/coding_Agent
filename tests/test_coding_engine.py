@@ -1,6 +1,8 @@
 import json
 import subprocess
 
+import coding_engine
+
 import pytest
 
 from coding_engine import (
@@ -148,5 +150,20 @@ def test_engine_rejects_changes_outside_explicit_task_allowlist(tmp_path):
     assert (root / "test_app.py").read_text(encoding="utf-8") == original
     assert git(root, "branch", "--show-current").stdout.strip() == "main"
     assert git(root, "branch", "--list", "agent/task-only-change-app-py-*").stdout.strip() == ""
+    assert git(root, "status", "--porcelain").stdout.strip() == ""
+
+def test_engine_does_not_create_branch_if_model_setup_fails(tmp_path, monkeypatch):
+    root = make_repo(tmp_path)
+
+    def broken_model_client():
+        raise RuntimeError("invalid model configuration")
+
+    monkeypatch.setattr(coding_engine, "ModelClient", broken_model_client)
+
+    with pytest.raises(RuntimeError, match="invalid model configuration"):
+        run_coding_task(root, "Inspect repository")
+
+    assert git(root, "branch", "--show-current").stdout.strip() == "main"
+    assert git(root, "branch", "--list", "agent/task-*").stdout.strip() == ""
     assert git(root, "status", "--porcelain").stdout.strip() == ""
 
