@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Task: {task.id}")
             print(f"Status: {task.status}")
             if task.status == "succeeded":
-                print("\\nCoding report:\\n")
+                print("\nCoding report:\n")
                 print(task.result or "(The coding engine returned an empty report.)")
                 return 0
             print(f"Coding failed: {task.error}", file=sys.stderr)
