@@ -13,9 +13,10 @@ def run_next_coding_task(
     model_client: Any | None = None,
     *,
     max_attempts: int = 2,
+    claimed_task: Task | None = None,
 ) -> Task | None:
-    """Claim one task, run the bounded coding engine, and persist its outcome."""
-    task = queue.claim_next()
+    """Run one coding task and persist its outcome."""
+    task = claimed_task or queue.claim_next(kind="code")
     if task is None:
         return None
     try:
