@@ -355,11 +355,13 @@ def run_coding_task(
     base_branch = _git(root, "branch", "--show-current").stdout.strip()
     if not base_branch:
         raise CodingEngineError("Could not determine the current base branch.")
+    # Initialize the model client before creating a task branch. Configuration
+    # errors should not leave an abandoned branch behind.
+    client = model_client or ModelClient()
     slug = re.sub(r"[^a-z0-9-]+", "-", prompt.lower()).strip("-")[:24].strip("-")
     branch = "agent/task-" + (slug or "task") + "-" + uuid.uuid4().hex[:8]
     _git(root, "switch", "-c", branch)
 
-    client = model_client or ModelClient()
     last_error = ""
     for attempt in range(1, max_attempts + 1):
         targets: dict[str, Path] = {}
