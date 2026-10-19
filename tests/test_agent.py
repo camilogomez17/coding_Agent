@@ -1,7 +1,9 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import agent
 from model_client import ModelError
+from task_queue import TaskQueue
 
 
 def test_task_add_and_list_use_persistent_queue(tmp_path, monkeypatch, capsys):
@@ -82,3 +84,53 @@ def test_inspect_command_returns_inspector_exit_code(monkeypatch, tmp_path):
 
     assert result == 1
     assert seen["workspace"] == str(tmp_path)
+
+
+def test_task_diagnose_prints_persisted_report(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_QUEUE_PATH", str(tmp_path / "tasks.json"))
+    completed = SimpleNamespace(
+        id="diagnostic-123",
+        status="succeeded",
+        result="Found a possible issue in app.py.",
+        error=None,
+    )
+    seen = {}
+
+    def fake_diagnose(queue):
+        seen["queue"] = queue
+        return completed
+
+    monkeypatch.setattr(agent, "run_next_diagnostic", fake_diagnose)
+
+    result = agent.main(["task", "diagnose"])
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert seen["queue"].__class__ is TaskQueue
+    assert "Found a possible issue in app.py." in output
+
+
+def test_task_show_prints_saved_result(tmp_path, monkeypatch, capsys):
+    queue_path = tmp_path / "tasks.json"
+    monkeypatch.setenv("AGENT_QUEUE_PATH", str(queue_path))
+    queue = TaskQueue(queue_path)
+    task = queue.enqueue("Explain project", tmp_path)
+    queue.claim_next()
+    queue.complete(task.id, result="Read-only report.")
+
+    result = agent.main(["task", "show", task.id])
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert "Status: succeeded" in output
+    assert "Read-only report." in output
+
+
+def test_task_show_reports_unknown_id(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_QUEUE_PATH", str(tmp_path / "tasks.json"))
+
+    result = agent.main(["task", "show", "unknown-id"])
+    output = capsys.readouterr()
+
+    assert result == 1
+    assert "Task not found: unknown-id" in output.err
