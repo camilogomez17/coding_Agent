@@ -24,6 +24,21 @@ def run_next_coding_task(
         return None
     try:
         with isolated_worktree(task.workspace) as (worktree, base_branch):
+            checkpoint_saved = [False]
+
+            def checkpoint_verified_commit(verified_result):
+                report = (
+                    f"Summary: {verified_result.summary}\n"
+                    f"Branch: {verified_result.branch}\n"
+                    f"Base branch: {verified_result.base_branch}\n"
+                    f"Commit: {verified_result.commit}\n"
+                    f"Changed files: {', '.join(verified_result.changed_files)}\n"
+                    f"Engine attempts: {verified_result.attempts}\n"
+                    f"Verification: {verified_result.test_output}"
+                )
+                queue.annotate_task(task.id, report, action="verified_commit")
+                checkpoint_saved[0] = True
+
             result = run_coding_task(
                 worktree,
                 task.prompt,
@@ -31,6 +46,7 @@ def run_next_coding_task(
                 max_attempts=max_attempts,
                 allowed_paths=task.allowed_paths or None,
                 base_branch_override=base_branch,
+                on_verified_commit=checkpoint_verified_commit,
             )
             report = (
                 f"Summary: {result.summary}\n"
@@ -41,9 +57,9 @@ def run_next_coding_task(
                 f"Engine attempts: {result.attempts}\n"
                 f"Verification: {result.test_output}"
             )
-            # Persist the verified commit before optional publication and the
-            # final queue transition, so startup recovery can avoid rerunning it.
-            queue.annotate_task(task.id, report, action="verified_commit")
+            # Fall back to a checkpoint if the immediate callback could not persist it.
+            if not checkpoint_saved[0]:
+                queue.annotate_task(task.id, report, action="verified_commit")
             if task.publish:
                 try:
                     title = result.summary.strip() or task.prompt.strip()
