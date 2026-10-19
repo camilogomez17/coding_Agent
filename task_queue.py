@@ -14,6 +14,7 @@ from typing import Iterator
 
 STATUSES = {"pending", "running", "succeeded", "failed"}
 KINDS = {"diagnose", "code"}
+MAX_PLAN_STEPS = 20
 
 
 class QueueError(RuntimeError):
@@ -270,6 +271,8 @@ class TaskQueue:
             created = []
             previous_id = completed_task_id
             start_index = current["step_index"] + 1
+            if normalized and start_index + len(normalized) - 1 > MAX_PLAN_STEPS:
+                raise QueueError(f"Adaptive plans are capped at {MAX_PLAN_STEPS} total steps.")
             for offset, step in enumerate(normalized):
                 index = start_index + offset
                 task = Task(
