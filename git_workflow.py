@@ -49,6 +49,8 @@ def publish_branch(
     if _run(["git", "status", "--porcelain"], cwd=root).stdout.strip():
         raise GitPublishError("Refusing to publish because the working tree is not clean.")
     _run(["git", "remote", "get-url", "origin"], cwd=root)
+    # Fail before pushing anything if GitHub CLI is unavailable or unauthenticated.
+    _run(["gh", "auth", "status"], cwd=root, timeout=30)
 
     # Push only the task branch. This never pushes to the base branch.
     _run(["git", "push", "--set-upstream", "origin", branch], cwd=root, timeout=120)
