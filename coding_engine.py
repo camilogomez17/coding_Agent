@@ -1,4 +1,5 @@
 """Restricted model-assisted coding worker with bounded edits and verification."""
+
 from __future__ import annotations
 
 import ast
@@ -19,12 +20,34 @@ MAX_FILES_PER_PROPOSAL = 5
 MAX_FILE_BYTES = 64_000
 MAX_TOTAL_BYTES = 200_000
 TEST_TIMEOUT_SECONDS = 90
-ALLOWED_SUFFIXES = {".py", ".md", ".toml", ".yaml", ".yml", ".json", ".txt", ".cfg", ".ini"}
+ALLOWED_SUFFIXES = {
+    ".py",
+    ".md",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".txt",
+    ".cfg",
+    ".ini",
+}
 PROTECTED_NAMES = {
-    ".env", ".git", ".gitignore", ".gitattributes", ".gitmodules",
-    "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock",
-    "uv.lock", "pipfile.lock", "cargo.lock", "credentials", "credentials.json",
-    "id_rsa", "id_ed25519",
+    ".env",
+    ".git",
+    ".gitignore",
+    ".gitattributes",
+    ".gitmodules",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "poetry.lock",
+    "uv.lock",
+    "pipfile.lock",
+    "cargo.lock",
+    "credentials",
+    "credentials.json",
+    "id_rsa",
+    "id_ed25519",
 }
 PROTECTED_DIRS = {".git", ".github", ".ssh", ".aws", ".gnupg", "secrets", "private"}
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"}
@@ -73,16 +96,25 @@ def _run(
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
-            args, cwd=cwd, capture_output=True, text=True,
-            timeout=timeout, check=False, env=env,
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=env,
         )
     except subprocess.TimeoutExpired as error:
         raise CodingEngineError(f"Command timed out: {args[1:3]}") from error
     except OSError as error:
-        raise CodingEngineError(f"Could not run {args[0]}: {type(error).__name__}") from error
+        raise CodingEngineError(
+            f"Could not run {args[0]}: {type(error).__name__}"
+        ) from error
     if check and result.returncode:
         detail = (result.stderr or result.stdout or "no output").strip()[-3000:]
-        raise CodingEngineError(f"Command failed ({args[0]}, exit {result.returncode}): {detail}")
+        raise CodingEngineError(
+            f"Command failed ({args[0]}, exit {result.returncode}): {detail}"
+        )
     return result
 
 
@@ -92,14 +124,18 @@ def _git(root: Path, *args: str, timeout: int = 15) -> subprocess.CompletedProce
 
 def _parse_proposal(raw: str) -> tuple[str, list[ProposedChange]]:
     candidate = raw.strip() if isinstance(raw, str) else raw
-    if isinstance(candidate, str) and candidate.startswith("```") and candidate.endswith("```"):
+    if (
+        isinstance(candidate, str)
+        and candidate.startswith("```")
+        and candidate.endswith("```")
+    ):
         lines = candidate.splitlines()
         if (
             len(lines) >= 3
             and lines[0].strip().lower() in {"```", "```json"}
             and lines[-1].strip() == "```"
         ):
-            candidate = "\\n".join(lines[1:-1]).strip()
+            candidate = "\n".join(lines[1:-1]).strip()
     try:
         data = json.loads(candidate)
     except (TypeError, json.JSONDecodeError) as error:
@@ -108,25 +144,43 @@ def _parse_proposal(raw: str) -> tuple[str, list[ProposedChange]]:
         raise CodingEngineError("Model response must be an object with a changes list.")
     summary = data.get("summary", "")
     if not isinstance(summary, str) or len(summary) > 2000:
-        raise CodingEngineError("Proposal summary must be a string of at most 2000 characters.")
+        raise CodingEngineError(
+            "Proposal summary must be a string of at most 2000 characters."
+        )
     raw_changes = data["changes"]
     if not raw_changes or len(raw_changes) > MAX_FILES_PER_PROPOSAL:
-        raise CodingEngineError(f"Proposal must contain 1-{MAX_FILES_PER_PROPOSAL} file changes.")
+        raise CodingEngineError(
+            f"Proposal must contain 1-{MAX_FILES_PER_PROPOSAL} file changes."
+        )
     changes: list[ProposedChange] = []
     seen: set[str] = set()
     total_bytes = 0
     for item in raw_changes:
         if not isinstance(item, dict):
             raise CodingEngineError("Each proposed change must be an object.")
-        path, content, reason = item.get("path"), item.get("content"), item.get("reason", "")
-        if not isinstance(path, str) or not isinstance(content, str) or not isinstance(reason, str):
-            raise CodingEngineError("Each change requires string path/content and optional string reason.")
+        path, content, reason = (
+            item.get("path"),
+            item.get("content"),
+            item.get("reason", ""),
+        )
+        if (
+            not isinstance(path, str)
+            or not isinstance(content, str)
+            or not isinstance(reason, str)
+        ):
+            raise CodingEngineError(
+                "Each change requires string path/content and optional string reason."
+            )
         if len(reason) > 1000:
             raise CodingEngineError("Change reason exceeds 1000 characters.")
         normalized = PurePosixPath(path)
-        if (not path or normalized.is_absolute() or "\\" in path
-                or any(part in {"", ".", ".."} for part in path.split("/"))
-                or normalized.as_posix() != path):
+        if (
+            not path
+            or normalized.is_absolute()
+            or "\\" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            or normalized.as_posix() != path
+        ):
             raise CodingEngineError(f"Unsafe relative path: {path!r}")
         if path in seen:
             raise CodingEngineError(f"Duplicate path in proposal: {path}")
@@ -134,12 +188,18 @@ def _parse_proposal(raw: str) -> tuple[str, list[ProposedChange]]:
         size = len(content.encode("utf-8"))
         total_bytes += size
         if size > MAX_FILE_BYTES:
-            raise CodingEngineError(f"Proposed file exceeds {MAX_FILE_BYTES} bytes: {path}")
+            raise CodingEngineError(
+                f"Proposed file exceeds {MAX_FILE_BYTES} bytes: {path}"
+            )
         if content.startswith("\ufeff") or "\x00" in content:
-            raise CodingEngineError(f"Binary or BOM-prefixed content is not allowed: {path}")
+            raise CodingEngineError(
+                f"Binary or BOM-prefixed content is not allowed: {path}"
+            )
         changes.append(ProposedChange(path, content, reason))
     if total_bytes > MAX_TOTAL_BYTES:
-        raise CodingEngineError(f"Proposal exceeds {MAX_TOTAL_BYTES} total content bytes.")
+        raise CodingEngineError(
+            f"Proposal exceeds {MAX_TOTAL_BYTES} total content bytes."
+        )
     return summary.strip(), changes
 
 
@@ -167,7 +227,9 @@ def _validate_target(root: Path, relative: str) -> Path:
         try:
             target.read_bytes().decode("utf-8")
         except (OSError, UnicodeError) as error:
-            raise CodingEngineError(f"Existing target is not readable UTF-8 text: {relative}") from error
+            raise CodingEngineError(
+                f"Existing target is not readable UTF-8 text: {relative}"
+            ) from error
     return target
 
 
@@ -179,7 +241,9 @@ def _validate_changes(root: Path, changes: list[ProposedChange]) -> dict[str, Pa
     return targets
 
 
-def _restore(root: Path, targets: dict[str, Path], originals: dict[str, bytes | None]) -> None:
+def _restore(
+    root: Path, targets: dict[str, Path], originals: dict[str, bytes | None]
+) -> None:
     for relative, target in targets.items():
         previous = originals[relative]
         if previous is None:
@@ -209,19 +273,32 @@ def _apply_and_verify(
             target = targets[change.path]
             target.parent.mkdir(parents=True, exist_ok=True)
             resolved_parent = target.parent.resolve()
-            if target.is_symlink() or (resolved_parent != root and root not in resolved_parent.parents):
-                raise CodingEngineError(f"Target changed during validation: {change.path}")
+            if target.is_symlink() or (
+                resolved_parent != root and root not in resolved_parent.parents
+            ):
+                raise CodingEngineError(
+                    f"Target changed during validation: {change.path}"
+                )
             target.write_text(change.content, encoding="utf-8", newline="")
         for change in changes:
             if change.path.endswith(".py"):
                 try:
-                    ast.parse(targets[change.path].read_text(encoding="utf-8"), filename=change.path)
+                    ast.parse(
+                        targets[change.path].read_text(encoding="utf-8"),
+                        filename=change.path,
+                    )
                 except (SyntaxError, UnicodeError) as error:
-                    raise CodingEngineError(f"Python syntax validation failed for {change.path}: {error}") from error
+                    raise CodingEngineError(
+                        f"Python syntax validation failed for {change.path}: {error}"
+                    ) from error
         _git(root, "diff", "--check")
         test_files = [
-            path for path in (*root.rglob("test_*.py"), *root.rglob("*_test.py"))
-            if not any(part in {".git", ".venv", "venv", "node_modules", "__pycache__"} for part in path.parts)
+            path
+            for path in (*root.rglob("test_*.py"), *root.rglob("*_test.py"))
+            if not any(
+                part in {".git", ".venv", "venv", "node_modules", "__pycache__"}
+                for part in path.parts
+            )
         ]
         if not test_files:
             return "No pytest files detected; Python syntax checks and git diff --check passed."
@@ -234,7 +311,9 @@ def _apply_and_verify(
         )
         output = (result.stdout + "\n" + result.stderr).strip()[-6000:]
         if result.returncode:
-            raise CodingEngineError(f"Test suite failed (exit {result.returncode}):\n{output}")
+            raise CodingEngineError(
+                f"Test suite failed (exit {result.returncode}):\n{output}"
+            )
         return output or "pytest passed."
     except Exception:
         _restore(root, targets, originals)
@@ -260,7 +339,9 @@ def run_coding_task(
     if Path(root_text).resolve() != root:
         raise CodingEngineError("Workspace must be the Git repository root.")
     if _git(root, "status", "--porcelain").stdout.strip():
-        raise CodingEngineError("Workspace must have a clean Git working tree before coding.")
+        raise CodingEngineError(
+            "Workspace must have a clean Git working tree before coding."
+        )
     if not _git(root, "branch", "--show-current").stdout.strip():
         raise CodingEngineError("Detached HEAD is not supported.")
     base_branch = _git(root, "branch", "--show-current").stdout.strip()
@@ -280,7 +361,8 @@ def run_coding_task(
             context = build_project_context(root)
             feedback = (
                 f"\nPrevious attempt failed validation or tests. Fix the issue and propose a new complete proposal.\n{last_error}\n"
-                if last_error else ""
+                if last_error
+                else ""
             )
             model_prompt = (
                 f"Task: {prompt.strip()}\n\nAttempt: {attempt} of {max_attempts}.\n"
@@ -291,17 +373,31 @@ def run_coding_task(
             summary, changes = _parse_proposal(raw)
             targets = _validate_changes(root, changes)
             originals = {
-                change.path: (targets[change.path].read_bytes() if targets[change.path].exists() else None)
+                change.path: (
+                    targets[change.path].read_bytes()
+                    if targets[change.path].exists()
+                    else None
+                )
                 for change in changes
             }
             test_output = _apply_and_verify(root, changes, targets, originals)
             _git(root, "add", "--", *[change.path for change in changes])
             _git(root, "diff", "--cached", "--check")
-            subject = re.sub(r"\s+", " ", summary).strip()[:60] or re.sub(r"\s+", " ", prompt.strip())[:60]
+            subject = (
+                re.sub(r"\s+", " ", summary).strip()[:60]
+                or re.sub(r"\s+", " ", prompt.strip())[:60]
+            )
             _git(root, "commit", "-m", f"agent: {subject}")
             commit = _git(root, "rev-parse", "HEAD").stdout.strip()
-            return CodingResult(branch, base_branch, commit, summary or prompt.strip(),
-                                tuple(change.path for change in changes), attempt, test_output)
+            return CodingResult(
+                branch,
+                base_branch,
+                commit,
+                summary or prompt.strip(),
+                tuple(change.path for change in changes),
+                attempt,
+                test_output,
+            )
         except Exception as error:
             last_error = f"{type(error).__name__}: {str(error)[:5000]}"
             if targets and originals:
