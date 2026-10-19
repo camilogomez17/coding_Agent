@@ -152,8 +152,9 @@ def test_purge_failed_removes_terminal_failures_but_preserves_other_tasks(tmp_pa
     queue.complete(successful.id, result="Done")
 
     assert queue.purge_failed() == 1
-    assert queue.list_tasks() == [queue.list_tasks()[0]]
-    assert queue.list_tasks()[0].id == successful.id
+    remaining = queue.list_tasks()
+    assert len(remaining) == 1
+    assert remaining[0].id == successful.id
 
 
 def test_purge_failed_refuses_to_break_live_task_dependencies(tmp_path):
