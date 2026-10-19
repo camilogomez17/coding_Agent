@@ -41,6 +41,9 @@ def run_next_coding_task(
                 f"Engine attempts: {result.attempts}\n"
                 f"Verification: {result.test_output}"
             )
+            # Persist the verified commit before optional publication and the
+            # final queue transition, so startup recovery can avoid rerunning it.
+            queue.annotate_task(task.id, report, action="verified_commit")
             if task.publish:
                 try:
                     title = result.summary.strip() or task.prompt.strip()
