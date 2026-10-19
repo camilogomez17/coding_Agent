@@ -20,13 +20,15 @@ applying changes."""
 def run_next_diagnostic(
     queue: TaskQueue,
     model_client: ModelClient | None = None,
+    *,
+    claimed_task: Task | None = None,
 ) -> Task | None:
-    """Claim and diagnose at most one queued task; never modify its workspace.
+    """Diagnose one queued task; never modify its workspace.
 
     Failures are recorded in the queue and retried according to its retry
     policy. A returned task with status pending means it can be retried.
     """
-    task = queue.claim_next()
+    task = claimed_task or queue.claim_next(kind="diagnose")
     if task is None:
         return None
 

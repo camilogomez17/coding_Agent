@@ -4,10 +4,14 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 from pathlib import Path
 
+from coding_worker import run_next_coding_task
 from diagnostic_worker import run_next_diagnostic
 from model_client import ModelClient, ModelError
+from planner import plan_objective
+from supervisor import install_signal_handlers, run_supervisor
 from task_queue import QueueError, TaskQueue
 from worker import inspect_repository
 
@@ -26,6 +30,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
+    serve_parser = commands.add_parser("serve", help="Continuously process queued tasks.")
+    serve_parser.add_argument("--poll-interval", type=float, default=5.0)
+    serve_parser.add_argument("--max-tasks", type=int, default=None)
+    serve_parser.add_argument("--no-recover", action="store_true", help="Do not recover interrupted tasks at startup.")
+
     inspect_parser = commands.add_parser("inspect", help="Run read-only repository checks.")
     inspect_parser.add_argument("workspace", nargs="?", default=".")
 
@@ -38,7 +47,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     add_parser = task_commands.add_parser("add", help="Queue a task without executing it.")
     add_parser.add_argument("--workspace", required=True)
+    add_parser.add_argument("--mode", choices=["diagnose", "code"], default="diagnose")
     add_parser.add_argument("prompt", nargs="+")
+
+    plan_parser = task_commands.add_parser("plan", help="Plan a high-level objective into dependent coding tasks.")
+    plan_parser.add_argument("--workspace", required=True)
+    plan_parser.add_argument("objective", nargs="+")
 
     list_parser = task_commands.add_parser("list", help="List queued tasks.")
     list_parser.add_argument("--status", choices=["pending", "running", "succeeded", "failed"])
@@ -46,6 +60,10 @@ def _build_parser() -> argparse.ArgumentParser:
     task_commands.add_parser(
         "diagnose",
         help="Run one queued task as a read-only model-assisted diagnosis.",
+    )
+    task_commands.add_parser(
+        "code",
+        help="Run one queued task through the restricted coding engine.",
     )
 
     show_parser = task_commands.add_parser("show", help="Show a task's saved result or error.")
@@ -70,8 +88,21 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         queue = _queue()
+        if args.command == "serve":
+            stop_event = threading.Event()
+            restore_handlers = install_signal_handlers(stop_event)
+            try:
+                count = run_supervisor(
+                    queue, poll_interval=args.poll_interval, max_tasks=args.max_tasks,
+                    stop_event=stop_event, recover=not args.no_recover,
+                    on_task=lambda task: print(f"Task {task.id}: {task.status} ({task.kind})"),
+                )
+                print(f"Supervisor stopped after processing {count} task(s).")
+                return 0
+            finally:
+                restore_handlers()
         if args.task_command == "add":
-            task = queue.enqueue(" ".join(args.prompt), args.workspace)
+            task = queue.enqueue(" ".join(args.prompt), args.workspace, kind=args.mode)
             print(f"Queued task {task.id}")
             print(f"Workspace: {task.workspace}")
             print(f"Status: {task.status}")
@@ -84,13 +115,38 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             for task in tasks:
                 print(
-                    f"{task.id}  {task.status:<9} attempts={task.attempts} "
+                    f"{task.id}  {task.status:<9} kind={task.kind:<8} attempts={task.attempts} "
                     f"workspace={task.workspace}"
                 )
+                if task.plan_id:
+                    print(f"  Plan: {task.plan_id} step={task.step_index} depends_on={task.depends_on}")
                 print(f"  {task.prompt}")
                 if task.error:
                     print(f"  Last error: {task.error}")
             return 0
+
+        if args.task_command == "plan":
+            tasks = plan_objective(queue, args.workspace, " ".join(args.objective))
+            print(f"Created plan {tasks[0].plan_id} with {len(tasks)} dependent coding steps.")
+            for task in tasks:
+                print(f"{task.step_index}. {task.prompt.splitlines()[1]} [{task.id}]")
+            return 0
+
+        if args.task_command == "code":
+            task = run_next_coding_task(queue)
+            if task is None:
+                print("No pending tasks to code.")
+                return 0
+            print(f"Task: {task.id}")
+            print(f"Status: {task.status}")
+            if task.status == "succeeded":
+                print("\nCoding report:\n")
+                print(task.result or "(The coding engine returned an empty report.)")
+                return 0
+            print(f"Coding failed: {task.error}", file=sys.stderr)
+            if task.status == "pending":
+                print("The task was requeued for a later retry.", file=sys.stderr)
+            return 1
 
         if args.task_command == "diagnose":
             task = run_next_diagnostic(queue)
@@ -120,6 +176,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Status: {task.status}")
             print(f"Workspace: {task.workspace}")
             print(f"Prompt: {task.prompt}")
+            print(f"Kind: {task.kind}")
+            if task.plan_id:
+                print(f"Plan: {task.plan_id} (step {task.step_index}, depends on {task.depends_on})")
+            if task.history:
+                print("History:")
+                for event in task.history:
+                    detail = " — " + event["detail"] if event.get("detail") else ""
+                    print(f"  {event['at']} {event['action']}{detail}")
             if task.error:
                 print(f"Error: {task.error}")
             if task.result:
@@ -132,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Recovered {count} interrupted task(s).")
             return 0
 
-    except (ModelError, QueueError, OSError) as error:
+    except (ModelError, QueueError, OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 

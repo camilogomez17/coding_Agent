@@ -1,31 +1,28 @@
 # coding_Agent
 
-An incremental, local-first coding-agent runtime for inspecting repositories and diagnosing queued tasks with a language model.
+A local-first coding-agent runtime for repository inspection, task planning, bounded code changes, verification, and persistent task processing.
 
-## Current capabilities
+## Capabilities
 
-- Scans Python files and parses them without executing project code.
-- Runs pytest when test files are present and returns a non-zero exit code when checks fail.
-- Provides a dependency-free model client for Ollama and OpenAI-compatible chat APIs.
-- In hybrid mode, tries Ollama first and falls back to the configured cloud API if local inference fails.
-- Persists tasks in a JSON queue with atomic writes, process locking, retry limits, and interrupted-task recovery.
-- Builds bounded repository context from project files, Git status, and a deterministic file inventory.
-- Excludes common secret files, generated directories, symlinks, binary files, and oversized files from model context.
-- Runs one queued task at a time as a read-only model-assisted diagnostic and persists the report in the queue.
-- Runs the test suite in GitHub Actions on pushes to `main` and pull requests targeting `main`.
-
-**Important:** this is not yet an autonomous 24/7 coding agent. The diagnostic worker can inspect context and save reports, but it does not edit project files, run arbitrary model-requested commands, or continuously process tasks in the background.
+- Builds bounded repository context without following symlinks or intentionally including common secret files.
+- Supports local Ollama and OpenAI-compatible model endpoints.
+- Stores tasks in an atomically written, process-locked JSON queue.
+- Persists task status, attempts, timestamps, errors, results, and an append-only event history.
+- Recovers tasks left running after a process interruption, subject to retry limits.
+- Plans a high-level objective into 2-8 ordered coding steps. Each step waits for the previous step to succeed; downstream steps are marked blocked if a prerequisite fails.
+- Runs read-only diagnostic tasks or restricted coding tasks from the same queue.
+- Applies bounded model-proposed file changes on a dedicated local Git branch, checks Python syntax, runs pytest when tests are present, rolls back failed proposals, retries within strict limits, and commits verified changes.
+- Provides a persistent supervisor loop with idle polling and graceful SIGINT/SIGTERM shutdown after the active task completes.
+- Runs the test suite in GitHub Actions.
 
 ## Requirements
 
 - Python 3.10 or newer.
-- pytest for tests.
-- Ollama for local inference, if using local or hybrid mode.
-- An API key for the selected OpenAI-compatible cloud endpoint if cloud mode is used or hybrid fallback is desired.
+- pytest for tests and coding-mode verification.
+- Ollama for local or hybrid inference, if using local mode.
+- An API key for the configured OpenAI-compatible endpoint if cloud mode is used or hybrid fallback is desired.
 
-## Run tests
-
-Create and activate a virtual environment, then install pytest:
+## Install and test
 
 ```bash
 python3 -m venv .venv
@@ -34,86 +31,103 @@ python -m pip install pytest
 python -m pytest -q
 ```
 
-## Configure local inference on an Apple Silicon Mac with 16 GB memory
+## Configure the model
 
-Install Ollama from https://ollama.com, then download a coding model that fits your memory budget:
+For local inference on a machine running Ollama:
 
 ```bash
 ollama pull qwen2.5-coder:7b
-```
-
-For local-only inference without an API key:
-
-```bash
 export AGENT_MODEL_MODE=local
 export AGENT_LOCAL_MODEL=qwen2.5-coder:7b
 export AGENT_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-Hybrid mode tries local inference first. It can send prompts and repository context to a configured cloud provider if local inference fails and a cloud API key is available. The client defaults to the OpenAI API at `https://api.openai.com/v1` and model `gpt-4.1-mini`. Configure compatible providers with `AGENT_CLOUD_URL` and `AGENT_CLOUD_MODEL`. Never commit API keys.
+Hybrid mode tries local inference first, then uses the configured cloud endpoint if local inference fails and a cloud API key is available. Defaults are the OpenAI API at `https://api.openai.com/v1` and model `gpt-4.1-mini`. Compatible endpoints can be configured using `AGENT_CLOUD_URL` and `AGENT_CLOUD_MODEL`. Never commit API keys.
 
-**Privacy:** the context builder excludes common secret-file names and directories, but cannot guarantee detection of secrets embedded in ordinary source files. Prefer local-only mode for private repositories. Cloud fallback can transmit supplied context to the configured provider.
+**Privacy:** repository context can contain source code and is sent to the configured model endpoint. Secret-file filters are best-effort and cannot guarantee detection of secrets embedded in source files. Prefer local-only mode for private repositories.
 
-## CLI examples
+## CLI
 
-Run read-only repository checks:
+Inspect a repository without intentionally executing its source files:
 
 ```bash
 python agent.py inspect /path/to/project
 ```
 
-Send a prompt directly to the configured model:
+Ask the configured model a direct question:
 
 ```bash
 python agent.py ask "Explain the architecture of this project"
 ```
 
-Queue a task for a project. This records the task without executing it:
+Queue a read-only diagnostic or coding task:
 
 ```bash
 python agent.py task add --workspace /path/to/project "Find likely bugs and suggest fixes"
+python agent.py task add --workspace /path/to/project --mode code "Fix the parser tests"
 python agent.py task list
 python agent.py task list --status pending
-```
-
-Run one pending task as a read-only diagnostic using the configured model:
-
-```bash
-python agent.py task diagnose
-```
-
-The command claims at most one pending task, builds a bounded repository context, asks the model for a diagnosis, and stores the report in the queue. It never applies edits or executes commands requested by the model. If inference fails, the task is retried within the queue's attempt limit.
-
-View the saved result using the task ID printed by `task diagnose`:
-
-```bash
 python agent.py task show TASK_ID
 ```
 
-Queue state is stored by default in `~/.coding_agent/tasks.json`. Override it with `AGENT_QUEUE_PATH`. The `task recover` command should only be used after confirming that no other supervisor is actively processing the same queue.
+Run one task at a time manually:
 
-## Model client settings
+```bash
+python agent.py task diagnose
+python agent.py task code
+```
+
+Plan a high-level coding objective into ordered, dependent tasks:
+
+```bash
+python agent.py task plan --workspace /path/to/project "Add import sorting and tests"
+python agent.py task list
+```
+
+The planner uses the configured model to produce 2-8 bounded steps. Steps are queued atomically and executed in order. A step does not become eligible until its predecessor succeeds; a permanently failed prerequisite blocks later steps. Review generated plans before letting them run.
+
+Start the persistent supervisor:
+
+```bash
+python agent.py serve
+```
+
+The supervisor polls the queue every five seconds by default and processes both diagnostic and coding tasks. It recovers interrupted tasks once at startup, records task events, waits when idle, and handles Ctrl-C/SIGTERM by stopping after the active task finishes. For a bounded smoke test:
+
+```bash
+python agent.py serve --poll-interval 1 --max-tasks 1
+```
+
+Use `--no-recover` only if you have already handled interrupted tasks yourself. Run exactly one supervisor per queue; do not run `task recover` while a supervisor is active.
+
+Queue state defaults to `~/.coding_agent/tasks.json`. Set `AGENT_QUEUE_PATH` to use a different queue file. Back up this file if its task history is important.
+
+## Restricted coding mode and safety limits
+
+Coding tasks require a Git repository root with a clean working tree. The engine creates a unique local branch named `agent/task-...`. Model output must be JSON containing complete file contents. Each proposal is limited to five files, 64 KB per file, and 200 KB total. Only selected text extensions are accepted; traversal, symlinks, secret-like paths, Git metadata, workflow files, and dependency lockfiles are blocked. The model cannot supply shell commands for execution.
+
+Python files are syntax-checked. If tests exist, `python -m pytest -q` runs with a 90-second timeout. Failed proposals are rolled back and retried within a hard cap of three attempts. Successful changes are committed on the task branch.
+
+**Important limitations:**
+
+- The supervisor is a single-host process, not a hosted service. It stops when the host shuts down unless configured under an appropriate process manager on an always-on machine.
+- The current planner sequences small coding tasks; it does not dynamically re-plan based on arbitrary results or guarantee that a broad objective can be completed.
+- The coding engine uses bounded complete-file proposals rather than general-purpose patch hunks.
+- Tests execute repository code. The current engine does not provide OS-level sandboxing, and the model is not allowed to choose commands but the configured test runner executes the project's tests. Use only trusted repositories and prefer a disposable container/worktree.
+- Runtime-created task branches remain local. The agent does not push branches, open pull requests, or merge changes automatically.
+- Review generated plans and code changes before relying on them. Keep merging under human control.
+
+## Environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AGENT_MODEL_MODE` | `hybrid` | `local`, `cloud`, or `hybrid` |
 | `AGENT_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama server URL |
-| `AGENT_LOCAL_MODEL` | `qwen2.5-coder:7b` | Ollama model name |
+| `AGENT_LOCAL_MODEL` | `qwen2.5-coder:7b` | Local model |
 | `AGENT_CLOUD_URL` | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
-| `AGENT_CLOUD_MODEL` | `gpt-4.1-mini` | Cloud model name |
+| `AGENT_CLOUD_MODEL` | `gpt-4.1-mini` | Cloud model |
 | `OPENAI_API_KEY` | unset | Cloud API key |
 | `AGENT_MODEL_TIMEOUT` | `120` | Per-request timeout in seconds |
 | `AGENT_QUEUE_PATH` | `~/.coding_agent/tasks.json` | Persistent queue file |
 
-The Python model interface is `ModelClient().generate(prompt, system=None)` in `model_client.py`. It uses Python's standard library and adds no runtime package dependencies.
-
-## Planned development sequence
-
-1. Model client, CLI, durable queue, and repeatable checks.
-2. Bounded read-only repository context and diagnostic reports (implemented).
-3. Restricted edit worker with diff review and verification.
-4. A single-task worker loop with retry budgets, cancellation, and run history.
-5. Resource limits, process supervision, and safe restart behavior.
-6. Optional launch-at-login setup for unattended operation.
-
-The agent should not autonomously edit arbitrary projects until workspace boundaries, task limits, verification, and recovery are implemented and tested.
+The model client interface is `ModelClient().generate(prompt, system=None)` in `model_client.py`. Runtime code uses Python's standard library; pytest is required for tests.
