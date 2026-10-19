@@ -209,8 +209,8 @@ def test_task_plan_passes_allowlist_to_all_planned_steps(tmp_path, monkeypatch, 
             publish=publish, allowed_paths=allowed_paths,
         )
         return [
-            SimpleNamespace(plan_id="plan-1", step_index=1, prompt="Plan step 1/2: first"),
-            SimpleNamespace(plan_id="plan-1", step_index=2, prompt="Plan step 2/2: second"),
+            SimpleNamespace(plan_id="plan-1", step_index=1, prompt="Overall objective: Improve the parser\nPlan step 1/2: first"),
+            SimpleNamespace(plan_id="plan-1", step_index=2, prompt="Overall objective: Improve the parser\nPlan step 2/2: second"),
         ]
 
     monkeypatch.setattr(agent, "plan_objective", fake_plan)
