@@ -32,6 +32,8 @@ def test_publish_pushes_task_branch_and_creates_pr(tmp_path, monkeypatch):
         calls.append(args)
         if args[:3] == ["gh", "auth", "status"]:
             return subprocess.CompletedProcess(args, 0, "Logged in", "")
+        if args[:3] == ["gh", "auth", "status"]:
+            return subprocess.CompletedProcess(args, 0, "Logged in", "")
         if args[:2] == ["git", "push"]:
             return subprocess.CompletedProcess(args, 0, "", "")
         if args[:3] == ["gh", "pr", "view"]:
