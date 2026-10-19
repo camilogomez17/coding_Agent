@@ -43,6 +43,12 @@ def run_supervisor(
         queue.recover_interrupted()
     processed = 0
     while not stop.is_set():
+        control = queue.runtime_control()
+        if control.get("cancel_requested"):
+            break
+        if control.get("paused"):
+            stop.wait(poll_interval)
+            continue
         task = run_next_task(queue)
         if task is None:
             stop.wait(poll_interval)
