@@ -1,9 +1,4 @@
-"""Durable, single-host task queue for the coding agent.
-
-Tasks are stored as JSON and writes are atomic. A filesystem lock serializes
-queue operations across local processes. This module schedules work; it does
-not execute prompts or modify project files.
-"""
+"""Durable, single-host task queue with dependencies and run history."""
 from __future__ import annotations
 
 import fcntl
@@ -12,13 +7,13 @@ import os
 import tempfile
 import uuid
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-
 STATUSES = {"pending", "running", "succeeded", "failed"}
+KINDS = {"diagnose", "code"}
 
 
 class QueueError(RuntimeError):
@@ -27,6 +22,13 @@ class QueueError(RuntimeError):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _event(action: str, detail: str | None = None) -> dict:
+    item = {"at": _now(), "action": action}
+    if detail:
+        item["detail"] = detail[:1000]
+    return item
 
 
 @dataclass
@@ -40,10 +42,15 @@ class Task:
     updated_at: str
     result: str | None = None
     error: str | None = None
+    kind: str = "diagnose"
+    plan_id: str | None = None
+    step_index: int | None = None
+    depends_on: str | None = None
+    history: list[dict] = field(default_factory=list)
 
 
 class TaskQueue:
-    """JSON-backed task queue with atomic persistence and process locking."""
+    """JSON-backed queue with atomic writes, process locking, dependencies and history."""
 
     def __init__(self, path: str | Path, max_attempts: int = 3):
         self.path = Path(path).expanduser().resolve()
@@ -72,11 +79,7 @@ class TaskQueue:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise QueueError("Task queue file is unreadable or invalid JSON.") from error
-        if (
-            not isinstance(data, dict)
-            or data.get("version") != 1
-            or not isinstance(data.get("tasks"), list)
-        ):
+        if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("tasks"), list):
             raise QueueError("Task queue file has an unsupported structure.")
         seen_ids = set()
         for item in data["tasks"]:
@@ -87,18 +90,22 @@ class TaskQueue:
             seen_ids.add(item["id"])
             if item.get("status") not in STATUSES:
                 raise QueueError("Task queue contains an invalid task status.")
+            # Backward compatibility for queue files created before run history/kinds.
+            item.setdefault("history", [])
+            item.setdefault("kind", "diagnose")
+            item.setdefault("plan_id", None)
+            item.setdefault("step_index", None)
+            item.setdefault("depends_on", None)
+            if item["kind"] not in KINDS or not isinstance(item["history"], list):
+                raise QueueError("Task queue contains invalid task metadata.")
         return data
 
     def _save(self, data: dict) -> None:
         temporary_path = None
         try:
             with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=self.path.parent,
-                prefix=f".{self.path.name}.",
-                suffix=".tmp",
-                delete=False,
+                "w", encoding="utf-8", dir=self.path.parent,
+                prefix=f".{self.path.name}.", suffix=".tmp", delete=False,
             ) as temporary_file:
                 temporary_path = Path(temporary_file.name)
                 json.dump(data, temporary_file, indent=2)
@@ -118,51 +125,114 @@ class TaskQueue:
         except TypeError as error:
             raise QueueError("Task queue contains an invalid task record.") from error
 
-    def enqueue(self, prompt: str, workspace: str | Path) -> Task:
+    def enqueue(
+        self, prompt: str, workspace: str | Path, *, kind: str = "diagnose",
+        plan_id: str | None = None, step_index: int | None = None,
+        depends_on: str | None = None,
+    ) -> Task:
         if not prompt or not prompt.strip():
             raise QueueError("Task prompt cannot be empty.")
+        if kind not in KINDS:
+            raise QueueError(f"Unknown task kind: {kind}")
         workspace_path = Path(workspace).expanduser().resolve()
         if not workspace_path.is_dir():
             raise QueueError(f"Workspace is not an existing directory: {workspace_path}")
-
         with self._locked():
             data = self._load()
             now = _now()
             task = Task(
-                id=uuid.uuid4().hex,
-                prompt=prompt.strip(),
-                workspace=str(workspace_path),
-                status="pending",
-                attempts=0,
-                created_at=now,
-                updated_at=now,
+                id=uuid.uuid4().hex, prompt=prompt.strip(), workspace=str(workspace_path),
+                status="pending", attempts=0, created_at=now, updated_at=now,
+                kind=kind, plan_id=plan_id, step_index=step_index, depends_on=depends_on,
+                history=[_event("queued")],
             )
             data["tasks"].append(asdict(task))
             self._save(data)
             return task
 
+    def enqueue_plan(self, objective: str, workspace: str | Path, steps: list[str]) -> list[Task]:
+        """Persist an ordered coding plan atomically; each step depends on its predecessor."""
+        if not objective or not objective.strip():
+            raise QueueError("Plan objective cannot be empty.")
+        if not steps or len(steps) > 8:
+            raise QueueError("A plan must contain between 1 and 8 steps.")
+        normalized = []
+        for step in steps:
+            if not isinstance(step, str) or not step.strip() or len(step) > 2000:
+                raise QueueError("Each plan step must be non-empty and at most 2000 characters.")
+            normalized.append(step.strip())
+        workspace_path = Path(workspace).expanduser().resolve()
+        if not workspace_path.is_dir():
+            raise QueueError(f"Workspace is not an existing directory: {workspace_path}")
+        plan_id = uuid.uuid4().hex
+        with self._locked():
+            data = self._load()
+            now = _now()
+            created: list[Task] = []
+            previous_id = None
+            for index, step in enumerate(normalized, start=1):
+                task = Task(
+                    id=uuid.uuid4().hex,
+                    prompt=(f"Overall objective: {objective.strip()}\n"
+                            f"Plan step {index}/{len(normalized)}: {step}\n"
+                            "Implement only this step. Respect repository constraints and verify your changes."),
+                    workspace=str(workspace_path), status="pending", attempts=0,
+                    created_at=now, updated_at=now, kind="code", plan_id=plan_id,
+                    step_index=index, depends_on=previous_id,
+                    history=[_event("queued", f"plan step {index}/{len(normalized)}")],
+                )
+                data["tasks"].append(asdict(task))
+                created.append(task)
+                previous_id = task.id
+            self._save(data)
+            return created
+
     def list_tasks(self, status: str | None = None) -> list[Task]:
         if status is not None and status not in STATUSES:
             raise QueueError(f"Unknown task status: {status}")
         with self._locked():
-            items = self._load()["tasks"]
-            tasks = [self._task(item) for item in items]
-            if status is not None:
-                tasks = [task for task in tasks if task.status == status]
-            return tasks
+            tasks = [self._task(item) for item in self._load()["tasks"]]
+            return [task for task in tasks if status is None or task.status == status]
 
-    def claim_next(self) -> Task | None:
-        """Atomically claim the oldest pending task, or return None."""
+    def claim_next(self, kind: str | None = None) -> Task | None:
+        """Claim the oldest eligible task. Plan steps wait for predecessors."""
+        if kind is not None and kind not in KINDS:
+            raise QueueError(f"Unknown task kind: {kind}")
         with self._locked():
             data = self._load()
+            by_id = {item["id"]: item for item in data["tasks"]}
+            changed = False
             for item in data["tasks"]:
-                if item["status"] == "pending":
-                    item["status"] = "running"
-                    item["attempts"] += 1
-                    item["updated_at"] = _now()
-                    item["error"] = None
-                    self._save(data)
-                    return self._task(item)
+                if item["status"] != "pending" or (kind and item["kind"] != kind):
+                    continue
+                dependency_id = item.get("depends_on")
+                if dependency_id:
+                    dependency = by_id.get(dependency_id)
+                    if dependency is None:
+                        item["status"] = "failed"
+                        item["error"] = "Plan dependency is missing; task blocked."
+                        item["updated_at"] = _now()
+                        item.setdefault("history", []).append(_event("blocked", item["error"]))
+                        changed = True
+                        continue
+                    if dependency["status"] == "failed":
+                        item["status"] = "failed"
+                        item["error"] = f"Blocked because prerequisite {dependency_id} failed."
+                        item["updated_at"] = _now()
+                        item.setdefault("history", []).append(_event("blocked", item["error"]))
+                        changed = True
+                        continue
+                    if dependency["status"] != "succeeded":
+                        continue
+                item["status"] = "running"
+                item["attempts"] += 1
+                item["updated_at"] = _now()
+                item["error"] = None
+                item.setdefault("history", []).append(_event("started", f"attempt {item['attempts']}"))
+                self._save(data)
+                return self._task(item)
+            if changed:
+                self._save(data)
             return None
 
     def complete(self, task_id: str, result: str = "") -> Task:
@@ -176,27 +246,19 @@ class TaskQueue:
             item = self._find_running(data, task_id)
             item["error"] = error.strip()
             item["result"] = None
-            item["status"] = (
-                "pending" if retry and item["attempts"] < self.max_attempts else "failed"
-            )
+            item["status"] = "pending" if retry and item["attempts"] < self.max_attempts else "failed"
             item["updated_at"] = _now()
+            item.setdefault("history", []).append(_event("failed", error.strip()))
             self._save(data)
             return self._task(item)
 
-    def _transition(
-        self,
-        task_id: str,
-        status: str,
-        result: str | None,
-        error: str | None,
-    ) -> Task:
+    def _transition(self, task_id: str, status: str, result: str | None, error: str | None) -> Task:
         with self._locked():
             data = self._load()
             item = self._find_running(data, task_id)
-            item["status"] = status
-            item["result"] = result
-            item["error"] = error
+            item["status"], item["result"], item["error"] = status, result, error
             item["updated_at"] = _now()
+            item.setdefault("history", []).append(_event(status))
             self._save(data)
             return self._task(item)
 
@@ -205,18 +267,12 @@ class TaskQueue:
         for item in data["tasks"]:
             if item["id"] == task_id:
                 if item["status"] != "running":
-                    raise QueueError(
-                        f"Task {task_id} must be running to record its outcome."
-                    )
+                    raise QueueError(f"Task {task_id} must be running to record its outcome.")
                 return item
         raise QueueError(f"Task not found: {task_id}")
 
     def recover_interrupted(self) -> int:
-        """Requeue interrupted work after restart, respecting the retry limit.
-
-        Call this once when starting a single supervisor process. Do not call it
-        while another supervisor is actively working from the same queue.
-        """
+        """Requeue interrupted work after restart, respecting retry limits."""
         recovered = 0
         with self._locked():
             data = self._load()
@@ -230,6 +286,7 @@ class TaskQueue:
                     item["status"] = "failed"
                     item["error"] = "Retry limit reached after an interrupted run."
                 item["updated_at"] = _now()
+                item.setdefault("history", []).append(_event("recovered", item["error"]))
                 recovered += 1
             if recovered:
                 self._save(data)
