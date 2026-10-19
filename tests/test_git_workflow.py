@@ -87,3 +87,53 @@ def test_publish_reuses_existing_pr_url(tmp_path, monkeypatch):
 
     assert url == "https://github.com/example/repo/pull/7"
     assert not any(call[:3] == ["gh", "pr", "create"] for call in calls)
+
+
+
+def test_publish_existing_branch_reuses_verified_commit_without_creating_another_commit(
+    tmp_path, monkeypatch
+):
+    root = make_repo(tmp_path)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(["git", "switch", "main"], cwd=root, check=True, capture_output=True)
+    original_run = git_workflow._run
+    calls = []
+
+    def fake_run(args, *, cwd, timeout=30, check=True):
+        calls.append((args, cwd))
+        if args[:3] == ["gh", "auth", "status"]:
+            return subprocess.CompletedProcess(args, 0, "Logged in", "")
+        if args[:2] == ["git", "push"]:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(
+                args, 0, "https://github.com/example/repo/pull/12\n", ""
+            )
+        return original_run(args, cwd=cwd, timeout=timeout, check=check)
+
+    monkeypatch.setattr(git_workflow, "_run", fake_run)
+    url = git_workflow.publish_existing_branch(
+        root,
+        branch="agent/task-test",
+        base_branch="main",
+        commit=commit,
+        title="Agent: Retry publication",
+        summary="Verified change",
+        changed_files=("README.md",),
+    )
+
+    assert url == "https://github.com/example/repo/pull/12"
+    assert any(args[:2] == ["git", "worktree"] and args[2] == "add"
+               for args, _ in calls)
+    assert not any(args[:3] == ["gh", "pr", "create"] for args, _ in calls)
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip() != commit
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip() == ""
