@@ -75,7 +75,7 @@ def test_validator_blocks_secrets_workflows_and_unapproved_extensions(tmp_path):
 def test_engine_commits_verified_changes_on_new_branch(tmp_path):
     root = make_repo(tmp_path)
     model = FakeModel(proposal("app.py", "def answer():\n    return 2\n", "Change answer"),
-                      proposal("app.py", "def answer():\n    return 1\n", "No-op fallback"))
+                      proposal("app.py", "def answer():\n    \"\"\"Return the expected answer.\"\"\"\n    return 1\n", "Retry with passing implementation"))
     # The first proposal fails tests, is rolled back, and the retry passes.
     result = run_coding_task(root, "Make answer return 2", model, max_attempts=2)
 
