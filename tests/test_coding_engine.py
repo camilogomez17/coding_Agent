@@ -132,3 +132,20 @@ def test_engine_refuses_more_than_three_attempts(tmp_path):
     root = make_repo(tmp_path)
     with pytest.raises(CodingEngineError, match="between 1 and 3"):
         run_coding_task(root, "do work", FakeModel(), max_attempts=4)
+
+def test_engine_rejects_changes_outside_explicit_task_allowlist(tmp_path):
+    root = make_repo(tmp_path)
+    original = (root / "test_app.py").read_text(encoding="utf-8")
+    model = FakeModel(proposal("test_app.py", "def test_unwanted():\n    assert False\n"))
+
+    with pytest.raises(CodingEngineError, match="outside the task allowlist"):
+        run_coding_task(
+            root, "Only change app.py", model, max_attempts=1,
+            allowed_paths=["app.py"],
+        )
+
+    assert (root / "test_app.py").read_text(encoding="utf-8") == original
+    assert git(root, "branch", "--show-current").stdout.strip() == "main"
+    assert git(root, "branch", "--list", "agent/task-only-change-app-py-*").stdout.strip() == ""
+    assert git(root, "status", "--porcelain").stdout.strip() == ""
+
