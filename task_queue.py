@@ -48,6 +48,7 @@ class Task:
     depends_on: str | None = None
     history: list[dict] = field(default_factory=list)
     publish: bool = False
+    allowed_paths: list[str] = field(default_factory=list)
 
 
 class TaskQueue:
@@ -98,8 +99,11 @@ class TaskQueue:
             item.setdefault("step_index", None)
             item.setdefault("depends_on", None)
             item.setdefault("publish", False)
+            item.setdefault("allowed_paths", [])
             if (item["kind"] not in KINDS or not isinstance(item["history"], list)
-                    or not isinstance(item["publish"], bool)):
+                    or not isinstance(item["publish"], bool)
+                    or not isinstance(item["allowed_paths"], list)
+                    or not all(isinstance(path, str) and path.strip() for path in item["allowed_paths"])):
                 raise QueueError("Task queue contains invalid task metadata.")
         return data
 
@@ -132,11 +136,17 @@ class TaskQueue:
         self, prompt: str, workspace: str | Path, *, kind: str = "diagnose",
         plan_id: str | None = None, step_index: int | None = None,
         depends_on: str | None = None, publish: bool = False,
+        allowed_paths: list[str] | None = None,
     ) -> Task:
         if not prompt or not prompt.strip():
             raise QueueError("Task prompt cannot be empty.")
         if kind not in KINDS:
             raise QueueError(f"Unknown task kind: {kind}")
+        if allowed_paths is not None and (
+            not all(isinstance(path, str) and path.strip() for path in allowed_paths)
+            or len(set(allowed_paths)) != len(allowed_paths)
+        ):
+            raise QueueError("allowed_paths must contain unique, non-empty path strings.")
         workspace_path = Path(workspace).expanduser().resolve()
         if not workspace_path.is_dir():
             raise QueueError(f"Workspace is not an existing directory: {workspace_path}")
@@ -148,13 +158,15 @@ class TaskQueue:
                 status="pending", attempts=0, created_at=now, updated_at=now,
                 kind=kind, plan_id=plan_id, step_index=step_index, depends_on=depends_on,
                 history=[_event("queued")], publish=publish,
+                allowed_paths=list(allowed_paths or []),
             )
             data["tasks"].append(asdict(task))
             self._save(data)
             return task
 
     def enqueue_plan(
-        self, objective: str, workspace: str | Path, steps: list[str], *, publish: bool = False
+        self, objective: str, workspace: str | Path, steps: list[str], *, publish: bool = False,
+        allowed_paths: list[str] | None = None,
     ) -> list[Task]:
         """Persist an ordered coding plan atomically; each step depends on its predecessor."""
         if not objective or not objective.strip():
@@ -166,6 +178,11 @@ class TaskQueue:
             if not isinstance(step, str) or not step.strip() or len(step) > 2000:
                 raise QueueError("Each plan step must be non-empty and at most 2000 characters.")
             normalized.append(step.strip())
+        if allowed_paths is not None and (
+            not all(isinstance(path, str) and path.strip() for path in allowed_paths)
+            or len(set(allowed_paths)) != len(allowed_paths)
+        ):
+            raise QueueError("allowed_paths must contain unique, non-empty path strings.")
         workspace_path = Path(workspace).expanduser().resolve()
         if not workspace_path.is_dir():
             raise QueueError(f"Workspace is not an existing directory: {workspace_path}")
@@ -185,7 +202,7 @@ class TaskQueue:
                     created_at=now, updated_at=now, kind="code", plan_id=plan_id,
                     step_index=index, depends_on=previous_id,
                     history=[_event("queued", f"plan step {index}/{len(normalized)}")],
-                    publish=publish,
+                    publish=publish, allowed_paths=list(allowed_paths or []),
                 )
                 data["tasks"].append(asdict(task))
                 created.append(task)
