@@ -14,7 +14,7 @@ An incremental, local-first coding-agent runtime for inspecting repositories and
 - Runs one queued task at a time as a read-only model-assisted diagnostic and persists the report in the queue.
 - Runs the test suite in GitHub Actions on pushes to `main` and pull requests targeting `main`.
 
-**Important:** this is not yet an autonomous 24/7 coding agent. The diagnostic worker can inspect context and save reports, but it does not edit project files, run arbitrary model-requested commands, or continuously process tasks in the background.
+- Includes an opt-in restricted coding worker that validates bounded JSON file proposals, creates a dedicated local Git branch, runs syntax checks and pytest with a timeout, rolls back failed proposals, retries within a fixed budget, and commits only verified changes.\n\n**Important:** this is not yet an autonomous 24/7 coding agent. The diagnostic worker can inspect context and save reports, but it does not edit project files, run arbitrary model-requested commands, or continuously process tasks in the background.
 
 ## Requirements
 
@@ -91,6 +91,23 @@ python agent.py task show TASK_ID
 ```
 
 Queue state is stored by default in `~/.coding_agent/tasks.json`. Override it with `AGENT_QUEUE_PATH`. The `task recover` command should only be used after confirming that no other supervisor is actively processing the same queue.
+
+## Restricted coding mode
+
+Queue a task as usual, then explicitly run the coding worker:
+
+```bash
+python agent.py task add --workspace /path/to/project "Fix the failing parser tests"
+python agent.py task code
+python agent.py task list
+python agent.py task show TASK_ID
+```
+
+The coding worker requires the workspace to be the root of a clean Git repository. It creates a unique local branch named `agent/task-...` from the current branch. Model output must be a JSON proposal with complete file contents; the worker accepts at most five files, allows only selected text extensions, caps each file at 64 KB and the whole proposal at 200 KB, and blocks traversal, symlinks, secret files, Git metadata, workflow files, and lockfiles. It never runs shell commands supplied by the model.
+
+Changed Python files are syntax-checked. If tests exist, `python -m pytest -q` runs with a 90-second timeout. Failed proposals are rolled back and retried at most twice by default; the engine enforces a hard maximum of three attempts. Successful changes are committed on the new branch. The worker does not push that branch or open a pull request automatically.
+
+**Execution warning:** pytest executes the repository's own test code. Use coding mode only in repositories you trust, preferably inside a disposable worktree or sandbox. The engine does not provide OS-level sandboxing.
 
 ## Model client settings
 
