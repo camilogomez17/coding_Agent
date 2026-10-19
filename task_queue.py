@@ -211,14 +211,12 @@ class TaskQueue:
             return created
 
     def purge_failed(self) -> int:
-        """Delete terminal failed tasks when no live task depends on them."""
+        """Delete failed tasks and clear saved failure details from remaining tasks."""
         with self._locked():
             data = self._load()
             failed_ids = {
                 item["id"] for item in data["tasks"] if item["status"] == "failed"
             }
-            if not failed_ids:
-                return 0
             dependents = [
                 item["id"] for item in data["tasks"]
                 if item["status"] != "failed" and item.get("depends_on") in failed_ids
@@ -229,9 +227,17 @@ class TaskQueue:
                     + ", ".join(dependents[:10])
                 )
             original_count = len(data["tasks"])
-            data["tasks"] = [
-                item for item in data["tasks"] if item["id"] not in failed_ids
-            ]
+            remaining = []
+            for item in data["tasks"]:
+                if item["id"] in failed_ids:
+                    continue
+                item["history"] = [
+                    event for event in item.get("history", [])
+                    if event.get("action") != "failed"
+                ]
+                item["error"] = None
+                remaining.append(item)
+            data["tasks"] = remaining
             self._save(data)
             return original_count - len(data["tasks"])
 
