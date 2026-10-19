@@ -18,7 +18,10 @@ def test_task_plan_reports_created_steps(tmp_path, monkeypatch, capsys):
         SimpleNamespace(plan_id="plan-1", step_index=1, id="task-1", prompt="Objective\nPlan step 1/2: Implement core"),
         SimpleNamespace(plan_id="plan-1", step_index=2, id="task-2", prompt="Objective\nPlan step 2/2: Add tests"),
     ]
-    monkeypatch.setattr(agent, "plan_objective", lambda queue, workspace, objective: created)
+    monkeypatch.setattr(
+        agent, "plan_objective",
+        lambda queue, workspace, objective, publish=False: created,
+    )
     assert agent.main(["task", "plan", "--workspace", str(tmp_path), "Implement", "feature"]) == 0
     output = capsys.readouterr().out
     assert "2 dependent coding steps" in output
