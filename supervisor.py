@@ -11,32 +11,13 @@ from task_queue import Task, TaskQueue
 
 
 def run_next_task(queue: TaskQueue) -> Task | None:
-    """Execute the oldest currently eligible task, dispatching by its saved kind."""
-    tasks = queue.list_tasks(status="pending")
-    by_id = {task.id: task for task in queue.list_tasks()}
-    candidate = None
-    for task in tasks:
-        if task.depends_on:
-            prerequisite = by_id.get(task.depends_on)
-            if prerequisite and prerequisite.status != "succeeded":
-                continue
-        candidate = task
-        break
-    if candidate is None:
-        # Let the queue mark tasks with failed/missing prerequisites as blocked.
-        for task in tasks:
-            result = queue.claim_next(kind=task.kind)
-            if result is not None:
-                return _execute_claimed(queue, result)
+    """Claim and execute one eligible task, dispatching by its persisted kind."""
+    task = queue.claim_next()
+    if task is None:
         return None
-    if candidate.kind == "code":
-        return run_next_coding_task(queue)
-    return run_next_diagnostic(queue)
-
-
-def _execute_claimed(queue: TaskQueue, task: Task) -> Task:
-    """Record a clear failure for a claimed task when no dispatcher handles it."""
-    return queue.fail(task.id, f"Unsupported task kind: {task.kind}", retry=False)
+    if task.kind == "code":
+        return run_next_coding_task(queue, claimed_task=task)
+    return run_next_diagnostic(queue, claimed_task=task)
 
 
 def run_supervisor(
@@ -48,10 +29,10 @@ def run_supervisor(
     recover: bool = True,
     on_task: Callable[[Task], None] | None = None,
 ) -> int:
-    """Poll continuously until signalled or max_tasks tasks have been attempted.
+    """Poll until signalled or max_tasks tasks have been attempted.
 
-    A single supervisor should own a queue. Interrupted running tasks are recovered
-    once at startup; the loop never resets running tasks while it is active.
+    A single supervisor should own a queue. Interrupted tasks are recovered once
+    at startup; the loop never resets running tasks while it is active.
     """
     if poll_interval < 0.1:
         raise ValueError("poll_interval must be at least 0.1 seconds.")
@@ -75,7 +56,7 @@ def run_supervisor(
 
 
 def install_signal_handlers(stop_event: threading.Event) -> Callable[[], None]:
-    """Install SIGINT/SIGTERM handlers that stop after the active task finishes."""
+    """Install SIGINT/SIGTERM handlers; restore the original handlers on exit."""
     previous = {}
 
     def request_stop(signum, frame):
