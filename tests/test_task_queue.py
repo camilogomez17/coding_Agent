@@ -229,6 +229,61 @@ def test_coding_worker_retries_publication_without_rerunning_engine(tmp_path, mo
     assert calls[0][1]["branch"] == "agent/task-publish-retry"
 
 
+def test_worker_recovers_crash_after_pr_creation_before_queue_completion(tmp_path, monkeypatch):
+    queue = TaskQueue(tmp_path / "tasks.json", max_attempts=3)
+    task = queue.enqueue("Implement feature", tmp_path, kind="code", publish=True)
+    queue.claim_next(kind="code")
+    commit = "a" * 40
+    report = (
+        "Summary: Implement feature\nBranch: agent/task-pr-crash\n"
+        "Base branch: main\n"
+        f"Commit: {commit}\nChanged files: app.py"
+    )
+    queue.annotate_task(task.id, report, action="verified_commit")
+
+    real_annotate = queue.annotate_task
+    state = {"interrupt_once": True}
+
+    def crash_after_remote_pr(task_id, detail, *, action):
+        if action == "published" and state["interrupt_once"]:
+            state["interrupt_once"] = False
+            raise RuntimeError("simulated process interruption after PR creation")
+        return real_annotate(task_id, detail, action=action)
+
+    monkeypatch.setattr(queue, "annotate_task", crash_after_remote_pr)
+    publication_calls = []
+
+    def fake_publish(workspace, **kwargs):
+        publication_calls.append(kwargs)
+        # The same URL on retry models the provider finding the already-created PR.
+        return "https://github.com/example/repo/pull/99"
+
+    monkeypatch.setattr(coding_worker, "publish_existing_branch", fake_publish)
+    monkeypatch.setattr(
+        coding_worker, "run_coding_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("verified coding task must not run again")
+        ),
+    )
+
+    first = queue.claim_next(kind="code")
+    interrupted = coding_worker.run_next_coding_task(
+        queue, model_client=object(), claimed_task=first
+    )
+    assert interrupted.status == "pending"
+    assert report in interrupted.result
+    assert interrupted.error and "simulated process interruption" in interrupted.error
+
+    second = queue.claim_next(kind="code")
+    completed = coding_worker.run_next_coding_task(
+        queue, model_client=object(), claimed_task=second
+    )
+    assert completed.status == "succeeded"
+    assert completed.result.count("https://github.com/example/repo/pull/99") >= 1
+    assert len(publication_calls) == 2
+    assert all(call["commit"] == commit for call in publication_calls)
+
+
 def test_recovery_completes_task_with_verified_commit_checkpoint(tmp_path):
     path = tmp_path / "tasks.json"
     queue = TaskQueue(path, max_attempts=3)
