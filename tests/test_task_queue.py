@@ -119,3 +119,19 @@ def test_unknown_status_filter_is_rejected(tmp_path):
 
     with pytest.raises(QueueError, match="Unknown task status"):
         queue.list_tasks(status="waiting")
+
+
+
+def test_publish_preference_persists_for_tasks_and_plans(tmp_path):
+    path = tmp_path / "tasks.json"
+    queue = TaskQueue(path)
+    task = queue.enqueue("Make a change", tmp_path, kind="code", publish=True)
+    plan = queue.enqueue_plan("Build a feature", tmp_path, ["Step one", "Step two"], publish=True)
+
+    reloaded = TaskQueue(path)
+    tasks = reloaded.list_tasks()
+
+    assert next(item for item in tasks if item.id == task.id).publish is True
+    plan_tasks = [item for item in tasks if item.plan_id == plan[0].plan_id]
+    assert len(plan_tasks) == 2
+    assert all(item.publish for item in plan_tasks)

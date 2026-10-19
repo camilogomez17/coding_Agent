@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from coding_engine import CodingEngineError, run_coding_task
+from git_workflow import GitPublishError, publish_branch
 from model_client import ModelClient
 from task_queue import Task, TaskQueue
 
@@ -29,11 +30,29 @@ def run_next_coding_task(
         report = (
             f"Summary: {result.summary}\n"
             f"Branch: {result.branch}\n"
+            f"Base branch: {result.base_branch}\n"
             f"Commit: {result.commit}\n"
             f"Changed files: {', '.join(result.changed_files)}\n"
             f"Engine attempts: {result.attempts}\n"
             f"Verification: {result.test_output}"
         )
+        if task.publish:
+            try:
+                title = result.summary.strip() or task.prompt.strip()
+                pull_request_url = publish_branch(
+                    task.workspace,
+                    branch=result.branch,
+                    base_branch=result.base_branch,
+                    title=f"Agent: {title}",
+                    summary=result.summary,
+                    commit=result.commit,
+                    changed_files=result.changed_files,
+                )
+                report += f"\nPull request: {pull_request_url}"
+            except GitPublishError as publish_error:
+                # Local verification and commit succeeded. Preserve task success while
+                # making publication failure visible and leaving the branch available.
+                report += f"\nPublish failed: {publish_error}"
         return queue.complete(task.id, result=report)
     except Exception as error:
         reason = f"{type(error).__name__}: {error}"

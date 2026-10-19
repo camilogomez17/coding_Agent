@@ -44,6 +44,7 @@ class ProposedChange:
 @dataclass(frozen=True)
 class CodingResult:
     branch: str
+    base_branch: str
     commit: str
     summary: str
     changed_files: tuple[str, ...]
@@ -253,6 +254,9 @@ def run_coding_task(
         raise CodingEngineError("Workspace must have a clean Git working tree before coding.")
     if not _git(root, "branch", "--show-current").stdout.strip():
         raise CodingEngineError("Detached HEAD is not supported.")
+    base_branch = _git(root, "branch", "--show-current").stdout.strip()
+    if not base_branch:
+        raise CodingEngineError("Could not determine the current base branch.")
     slug = re.sub(r"[^a-z0-9-]+", "-", prompt.lower()).strip("-")[:24].strip("-")
     branch = "agent/task-" + (slug or "task") + "-" + uuid.uuid4().hex[:8]
     _git(root, "switch", "-c", branch)
@@ -287,7 +291,7 @@ def run_coding_task(
             subject = re.sub(r"\s+", " ", summary).strip()[:60] or re.sub(r"\s+", " ", prompt.strip())[:60]
             _git(root, "commit", "-m", f"agent: {subject}")
             commit = _git(root, "rev-parse", "HEAD").stdout.strip()
-            return CodingResult(branch, commit, summary or prompt.strip(),
+            return CodingResult(branch, base_branch, commit, summary or prompt.strip(),
                                 tuple(change.path for change in changes), attempt, test_output)
         except Exception as error:
             last_error = f"{type(error).__name__}: {str(error)[:5000]}"
