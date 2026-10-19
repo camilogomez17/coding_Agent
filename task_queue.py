@@ -46,8 +46,8 @@ def _find_task_commit(workspace: str, task_id: str) -> tuple[str, str] | None:
         if log.returncode:
             return None
         trailer = f"Coding-Agent-Task: {task_id}"
-        for entry in log.stdout.split("\\x00"):
-            header, separator, body = entry.partition("\\t")
+        for entry in log.stdout.split("\x00"):
+            header, separator, body = entry.partition("\t")
             if not separator or not header.strip():
                 continue
             if trailer not in {line.strip() for line in body.splitlines()}:
