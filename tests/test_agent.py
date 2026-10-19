@@ -196,3 +196,33 @@ def test_task_purge_failed_requires_confirmation_and_deletes_failed_records(
     assert "Deleted 1 failed task record(s) and cleared saved failure details." in capsys.readouterr().out
     assert TaskQueue(queue_path).list_tasks() == []
 
+
+
+def test_task_plan_passes_allowlist_to_all_planned_steps(tmp_path, monkeypatch, capsys):
+    queue_path = tmp_path / "tasks.json"
+    monkeypatch.setenv("AGENT_QUEUE_PATH", str(queue_path))
+    seen = {}
+
+    def fake_plan(queue, workspace, objective, *, publish=False, allowed_paths=None):
+        seen.update(
+            queue=queue, workspace=workspace, objective=objective,
+            publish=publish, allowed_paths=allowed_paths,
+        )
+        return [
+            SimpleNamespace(plan_id="plan-1", step_index=1, prompt="Plan step 1/2: first"),
+            SimpleNamespace(plan_id="plan-1", step_index=2, prompt="Plan step 2/2: second"),
+        ]
+
+    monkeypatch.setattr(agent, "plan_objective", fake_plan)
+    result = agent.main([
+        "task", "plan", "--workspace", str(tmp_path),
+        "--allow-path", "src/parser.py",
+        "--allow-path", "tests/test_parser.py",
+        "Improve", "the", "parser",
+    ])
+
+    assert result == 0
+    assert seen["workspace"] == str(tmp_path)
+    assert seen["objective"] == "Improve the parser"
+    assert seen["allowed_paths"] == ["src/parser.py", "tests/test_parser.py"]
+    assert "Created plan plan-1 with 2 dependent coding steps." in capsys.readouterr().out
