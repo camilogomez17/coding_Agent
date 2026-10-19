@@ -303,7 +303,7 @@ def run_coding_task(
                 attempts=attempt,
                 test_output=test_output,
             )
-        except (CodingEngineError, ProjectContextError, OSError, ValueError) as error:
+        except Exception as error:
             last_error = f"{type(error).__name__}: {str(error)[:5000]}"
             # Failed validation can happen before any write; ensure no proposal
             # residue is left before asking for a retry.
