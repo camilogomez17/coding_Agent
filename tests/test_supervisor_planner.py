@@ -93,3 +93,26 @@ def test_plan_steps_are_bounded(tmp_path):
     queue = TaskQueue(tmp_path / "tasks.json")
     with pytest.raises(QueueError, match="between 1 and 8"):
         queue.enqueue_plan("Objective", tmp_path, ["one"] * 9)
+
+def test_second_supervisor_cannot_recover_active_tasks(tmp_path):
+    queue = TaskQueue(tmp_path / "tasks.json")
+    task = queue.enqueue("Long running task", tmp_path)
+    claimed = queue.claim_next()
+    with supervisor._supervisor_lock(queue):
+        with pytest.raises(supervisor.SupervisorAlreadyRunning, match="already owns queue"):
+            supervisor.run_supervisor(queue, poll_interval=0.1, max_tasks=1, recover=True)
+    restored = queue.list_tasks()[0]
+    assert restored.id == claimed.id == task.id
+    assert restored.status == "running"
+    assert restored.attempts == 1
+
+def test_supervisor_lock_releases_after_run_finishes(tmp_path, monkeypatch):
+    queue = TaskQueue(tmp_path / "tasks.json")
+    queue.enqueue("One task", tmp_path)
+    monkeypatch.setattr(
+        supervisor, "run_next_diagnostic",
+        lambda q, model_client=None, *, claimed_task=None: q.complete(claimed_task.id, "done"),
+    )
+    assert supervisor.run_supervisor(queue, poll_interval=0.1, max_tasks=1, recover=False) == 1
+    with supervisor._supervisor_lock(queue):
+        assert queue.list_tasks()[0].status == "succeeded"
