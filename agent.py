@@ -137,7 +137,9 @@ def main(argv: list[str] | None = None) -> int:
             if not args.yes:
                 raise QueueError("Confirm deletion with --yes.")
             count = queue.purge_failed()
-            print(f"Deleted {count} failed task record(s).")
+            print(
+                f"Deleted {count} failed task record(s) and cleared saved failure details."
+            )
             return 0
 
         if args.task_command == "list":
