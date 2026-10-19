@@ -47,6 +47,7 @@ class Task:
     step_index: int | None = None
     depends_on: str | None = None
     history: list[dict] = field(default_factory=list)
+    publish: bool = False
 
 
 class TaskQueue:
@@ -96,7 +97,9 @@ class TaskQueue:
             item.setdefault("plan_id", None)
             item.setdefault("step_index", None)
             item.setdefault("depends_on", None)
-            if item["kind"] not in KINDS or not isinstance(item["history"], list):
+            item.setdefault("publish", False)
+            if (item["kind"] not in KINDS or not isinstance(item["history"], list)
+                    or not isinstance(item["publish"], bool)):
                 raise QueueError("Task queue contains invalid task metadata.")
         return data
 
@@ -128,7 +131,7 @@ class TaskQueue:
     def enqueue(
         self, prompt: str, workspace: str | Path, *, kind: str = "diagnose",
         plan_id: str | None = None, step_index: int | None = None,
-        depends_on: str | None = None,
+        depends_on: str | None = None, publish: bool = False,
     ) -> Task:
         if not prompt or not prompt.strip():
             raise QueueError("Task prompt cannot be empty.")
@@ -144,13 +147,15 @@ class TaskQueue:
                 id=uuid.uuid4().hex, prompt=prompt.strip(), workspace=str(workspace_path),
                 status="pending", attempts=0, created_at=now, updated_at=now,
                 kind=kind, plan_id=plan_id, step_index=step_index, depends_on=depends_on,
-                history=[_event("queued")],
+                history=[_event("queued")], publish=publish,
             )
             data["tasks"].append(asdict(task))
             self._save(data)
             return task
 
-    def enqueue_plan(self, objective: str, workspace: str | Path, steps: list[str]) -> list[Task]:
+    def enqueue_plan(
+        self, objective: str, workspace: str | Path, steps: list[str], *, publish: bool = False
+    ) -> list[Task]:
         """Persist an ordered coding plan atomically; each step depends on its predecessor."""
         if not objective or not objective.strip():
             raise QueueError("Plan objective cannot be empty.")
@@ -180,6 +185,7 @@ class TaskQueue:
                     created_at=now, updated_at=now, kind="code", plan_id=plan_id,
                     step_index=index, depends_on=previous_id,
                     history=[_event("queued", f"plan step {index}/{len(normalized)}")],
+                    publish=publish,
                 )
                 data["tasks"].append(asdict(task))
                 created.append(task)
