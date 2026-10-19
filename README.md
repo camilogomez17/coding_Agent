@@ -105,7 +105,7 @@ python agent.py serve --poll-interval 1 --max-tasks 1
 
 Use `--no-recover` only if you have already handled interrupted tasks yourself. Run exactly one supervisor per queue; do not run `task recover` while a supervisor is active.
 
-Queue state defaults to `~/.coding_agent/tasks.json`. Set `AGENT_QUEUE_PATH` to use a different queue file. Back up this file if its task history is important. `task purge-failed --yes` permanently removes terminal failed task records; it refuses to delete records that non-failed tasks still depend on.
+Queue state defaults to `~/.coding_agent/tasks.json`. Set `AGENT_QUEUE_PATH` to use a different queue file. Back up this file if its task history is important. `task purge-failed --yes` permanently removes terminal failed task records and clears saved failure details from remaining tasks; it refuses to delete records that non-failed tasks still depend on.
 
 ## Restricted coding mode and safety limits
 
