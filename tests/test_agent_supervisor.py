@@ -20,7 +20,7 @@ def test_task_plan_reports_created_steps(tmp_path, monkeypatch, capsys):
     ]
     monkeypatch.setattr(
         agent, "plan_objective",
-        lambda queue, workspace, objective, publish=False, allowed_paths=None: created,
+        lambda queue, workspace, objective, publish=False, allowed_paths=None, adaptive=False: created,
     )
     assert agent.main(["task", "plan", "--workspace", str(tmp_path), "Implement", "feature"]) == 0
     output = capsys.readouterr().out
