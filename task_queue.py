@@ -388,6 +388,8 @@ class TaskQueue:
             raise QueueError(f"Unknown task kind: {kind}")
         with self._locked():
             data = self._load()
+            if data["control"].get("paused") or data["control"].get("cancel_requested"):
+                return None
             by_id = {item["id"]: item for item in data["tasks"]}
             changed = False
             for item in data["tasks"]:
