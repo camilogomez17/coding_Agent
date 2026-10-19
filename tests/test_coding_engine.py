@@ -65,6 +65,16 @@ def test_parse_proposal_rejects_traversal_and_duplicate_paths():
         _parse_proposal(duplicate)
 
 
+def test_parse_proposal_accepts_json_code_fence():
+    fenced = " ```json\n" + proposal("app.py", "x = 1\n") + "\n``` "
+    summary, changes = _parse_proposal(fenced)
+
+    assert summary == "Fix task"
+    assert len(changes) == 1
+    assert changes[0].path == "app.py"
+    assert changes[0].content == "x = 1\n"
+
+
 def test_validator_blocks_secrets_workflows_and_unapproved_extensions(tmp_path):
     root = tmp_path.resolve()
     for path in [".env", ".github/workflows/test.yml", "private/token.py", "payload.sh"]:
