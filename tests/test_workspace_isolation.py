@@ -46,6 +46,6 @@ def test_worktree_rejects_dirty_source_checkout(tmp_path):
 
 
 def test_worktree_rejects_non_repository(tmp_path):
-    with pytest.raises(WorkspaceIsolationError, match="Git repository root"):
+    with pytest.raises(WorkspaceIsolationError, match="Workspace is not a directory"):
         with isolated_worktree(tmp_path / "missing"):
             pass
