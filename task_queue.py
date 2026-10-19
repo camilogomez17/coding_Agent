@@ -220,6 +220,24 @@ class TaskQueue:
             return created
 
 
+
+    def annotate_task(self, task_id: str, detail: str, *, action: str) -> Task:
+        """Append a bounded operational note to a task result and event history."""
+        if not detail or not detail.strip():
+            raise QueueError("Task annotation cannot be empty.")
+        with self._locked():
+            data = self._load()
+            for item in data["tasks"]:
+                if item["id"] != task_id:
+                    continue
+                item["result"] = ((item.get("result") or "").rstrip()
+                                  + "\\n" + detail.strip()[:1000]).strip()
+                item["updated_at"] = _now()
+                item.setdefault("history", []).append(_event(action, detail))
+                self._save(data)
+                return self._task(item)
+            raise QueueError(f"Task not found: {task_id}")
+
     def revise_pending_plan(self, completed_task_id: str, steps: list[str]) -> list[Task]:
         """Replace only the unstarted tail of an adaptive plan after a successful step."""
         if not isinstance(steps, list) or len(steps) > 8:
