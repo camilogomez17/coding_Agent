@@ -134,3 +134,28 @@ def test_task_show_reports_unknown_id(tmp_path, monkeypatch, capsys):
 
     assert result == 1
     assert "Task not found: unknown-id" in output.err
+
+
+
+def test_task_code_runs_one_queued_coding_task(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AGENT_QUEUE_PATH", str(tmp_path / "tasks.json"))
+    completed = SimpleNamespace(
+        id="coding-123",
+        status="succeeded",
+        result="Branch: agent/task-example",
+        error=None,
+    )
+    seen = {}
+
+    def fake_code(queue):
+        seen["queue"] = queue
+        return completed
+
+    monkeypatch.setattr(agent, "run_next_coding_task", fake_code)
+    result = agent.main(["task", "code"])
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert seen["queue"].__class__ is TaskQueue
+    assert "Coding report" in output
+    assert "agent/task-example" in output
