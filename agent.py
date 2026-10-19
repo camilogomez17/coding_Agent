@@ -81,6 +81,14 @@ def _build_parser() -> argparse.ArgumentParser:
     show_parser = task_commands.add_parser("show", help="Show a task's saved result or error.")
     show_parser.add_argument("task_id")
 
+    purge_parser = task_commands.add_parser(
+        "purge-failed", help="Delete saved terminal failed tasks from the persistent queue."
+    )
+    purge_parser.add_argument(
+        "--yes", action="store_true",
+        help="Confirm deletion of failed task records.",
+    )
+
     task_commands.add_parser(
         "recover",
         help="Recover interrupted tasks after confirming no other supervisor is running.",
@@ -123,6 +131,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Queued task {task.id}")
             print(f"Workspace: {task.workspace}")
             print(f"Status: {task.status}")
+            return 0
+
+        if args.task_command == "purge-failed":
+            if not args.yes:
+                raise QueueError("Confirm deletion with --yes.")
+            count = queue.purge_failed()
+            print(f"Deleted {count} failed task record(s).")
             return 0
 
         if args.task_command == "list":
