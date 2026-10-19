@@ -94,6 +94,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Confirm deletion of failed task records.",
     )
 
+    task_commands.add_parser("status", help="Show queue state and live supervisor status.")
+    task_commands.add_parser("pause", help="Pause future task claims; active work continues.")
+    task_commands.add_parser("resume", help="Resume task processing.")
+    task_commands.add_parser("cancel", help="Cancel pending tasks and stop after active work finishes.")
+
     task_commands.add_parser(
         "recover",
         help="Recover interrupted tasks after confirming no other supervisor is running.",
@@ -136,6 +141,33 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Queued task {task.id}")
             print(f"Workspace: {task.workspace}")
             print(f"Status: {task.status}")
+            return 0
+
+
+        if args.task_command == "status":
+            control = queue.runtime_control()
+            state = "cancel requested" if control["cancel_requested"] else "paused" if control["paused"] else "ready"
+            print(f"Supervisor: {state}")
+            print(f"Running task IDs: {', '.join(control['running_tasks']) or '(none)'}")
+            print("Task counts: " + ", ".join(f"{key}={value}" for key, value in control["counts"].items()))
+            for task in queue.list_tasks():
+                if task.status in {"running", "pending"}:
+                    print(f"{task.id}  {task.status:<9} {task.kind}: {task.prompt.splitlines()[0][:100]}")
+            return 0
+
+        if args.task_command == "pause":
+            queue.set_paused(True)
+            print("Queue paused. Active work will finish; no new tasks will be claimed.")
+            return 0
+
+        if args.task_command == "resume":
+            queue.set_paused(False)
+            print("Queue resumed.")
+            return 0
+
+        if args.task_command == "cancel":
+            count = queue.request_cancel()
+            print(f"Cancellation requested. Cancelled {count} pending task(s); active work will finish.")
             return 0
 
         if args.task_command == "purge-failed":
