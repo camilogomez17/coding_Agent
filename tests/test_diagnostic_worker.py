@@ -78,8 +78,11 @@ def test_model_failure_is_recorded_and_task_is_retried(tmp_path):
 
 
 def test_missing_workspace_is_recorded_as_task_failure(tmp_path):
+    workspace = make_workspace(tmp_path)
     queue = TaskQueue(tmp_path / "tasks.json", max_attempts=1)
-    queue.enqueue("Diagnose missing project", tmp_path / "missing")
+    queue.enqueue("Diagnose missing project", workspace)
+    (workspace / "main.py").unlink()
+    workspace.rmdir()
 
     result = run_next_diagnostic(queue, FakeModelClient())
 
