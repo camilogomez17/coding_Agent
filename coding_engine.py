@@ -188,11 +188,11 @@ def _restore(targets: dict[str, Path], originals: dict[str, bytes | None]) -> No
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(previous)
-    # Remove newly-created empty parent directories, but never remove workspace root.
+    # Remove only empty directories created for proposal targets, never the workspace.
     for relative, target in targets.items():
         if originals[relative] is None:
             parent = target.parent
-            while parent != target.parents[-1] and parent.is_relative_to(target.parents[-1]):
+            while parent != root and parent.is_relative_to(root):
                 try:
                     parent.rmdir()
                 except OSError:
@@ -201,10 +201,11 @@ def _restore(targets: dict[str, Path], originals: dict[str, bytes | None]) -> No
 
 
 def _apply_and_verify(root: Path, changes: list[ProposedChange], targets: dict[str, Path]) -> str:
-    originals: dict[str, bytes | None] = {}
-    for change in changes:
-        target = targets[change.path]
-        originals[change.path] = target.read_bytes() if target.exists() else None
+    if originals is None:
+        originals = {}
+        for change in changes:
+            target = targets[change.path]
+            originals[change.path] = target.read_bytes() if target.exists() else None
     try:
         for change in changes:
             target = targets[change.path]
@@ -235,7 +236,7 @@ def _apply_and_verify(root: Path, changes: list[ProposedChange], targets: dict[s
             return output or "pytest passed."
         return "No pytest files detected; Python syntax checks and git diff --check passed."
     except Exception:
-        _restore(targets, originals)
+        _restore(root, targets, originals)
         raise
 
 
@@ -275,6 +276,9 @@ def run_coding_task(
     client = model_client or ModelClient()
     last_error = ""
     for attempt in range(1, max_attempts + 1):
+        targets: dict[str, Path] = {}
+        originals: dict[str, bytes | None] = {}
+        changes: list[ProposedChange] = []
         try:
             context = build_project_context(root)
             feedback = (
@@ -291,7 +295,11 @@ def run_coding_task(
             raw = client.generate(model_prompt, system=CODING_SYSTEM_PROMPT)
             summary, changes = _parse_proposal(raw)
             targets = _validate_changes(root, changes)
-            test_output = _apply_and_verify(root, changes, targets)
+            originals = {
+                change.path: (targets[change.path].read_bytes() if targets[change.path].exists() else None)
+                for change in changes
+            }
+            test_output = _apply_and_verify(root, changes, targets, originals)
             _git(root, "add", "--", *[change.path for change in changes])
             _git(root, "commit", "-m", f"agent: {summary[:60] or prompt.strip()[:60]}")
             commit = _git(root, "rev-parse", "HEAD").stdout.strip()
