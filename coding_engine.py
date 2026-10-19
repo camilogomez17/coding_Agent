@@ -1,10 +1,4 @@
-"""Restricted model-assisted coding worker with bounded edits and verification.
-
-The worker only operates in a clean Git repository, creates its own branch,
-accepts a small JSON file-change proposal, validates every path and size,
-runs syntax checks and pytest with timeouts, and commits only verified changes.
-It never executes shell commands supplied by the model.
-"""
+"""Restricted model-assisted coding worker with bounded edits and verification."""
 from __future__ import annotations
 
 import ast
@@ -19,7 +13,6 @@ from typing import Any
 
 from model_client import ModelClient
 from project_context import ProjectContextError, build_project_context
-
 
 MAX_ATTEMPTS = 2
 MAX_FILES_PER_PROPOSAL = 5
@@ -75,11 +68,12 @@ def _run(
     cwd: Path,
     timeout: int = 15,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
             args, cwd=cwd, capture_output=True, text=True,
-            timeout=timeout, check=False,
+            timeout=timeout, check=False, env=env,
         )
     except subprocess.TimeoutExpired as error:
         raise CodingEngineError(f"Command timed out: {args[1:3]}") from error
@@ -96,13 +90,10 @@ def _git(root: Path, *args: str, timeout: int = 15) -> subprocess.CompletedProce
 
 
 def _parse_proposal(raw: str) -> tuple[str, list[ProposedChange]]:
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^\`\`\`(?:json)?\s*|\s*\`\`\`$", "", text, flags=re.IGNORECASE)
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError as error:
-        raise CodingEngineError(f"Model response is not valid JSON (line {error.lineno}).") from error
+        data = json.loads(raw.strip())
+    except (TypeError, json.JSONDecodeError) as error:
+        raise CodingEngineError("Model response is not valid JSON.") from error
     if not isinstance(data, dict) or not isinstance(data.get("changes"), list):
         raise CodingEngineError("Model response must be an object with a changes list.")
     summary = data.get("summary", "")
@@ -117,8 +108,7 @@ def _parse_proposal(raw: str) -> tuple[str, list[ProposedChange]]:
     for item in raw_changes:
         if not isinstance(item, dict):
             raise CodingEngineError("Each proposed change must be an object.")
-        path, content = item.get("path"), item.get("content")
-        reason = item.get("reason", "")
+        path, content, reason = item.get("path"), item.get("content"), item.get("reason", "")
         if not isinstance(path, str) or not isinstance(content, str) or not isinstance(reason, str):
             raise CodingEngineError("Each change requires string path/content and optional string reason.")
         if len(reason) > 1000:
@@ -131,8 +121,9 @@ def _parse_proposal(raw: str) -> tuple[str, list[ProposedChange]]:
         if path in seen:
             raise CodingEngineError(f"Duplicate path in proposal: {path}")
         seen.add(path)
-        total_bytes += len(content.encode("utf-8"))
-        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+        size = len(content.encode("utf-8"))
+        total_bytes += size
+        if size > MAX_FILE_BYTES:
             raise CodingEngineError(f"Proposed file exceeds {MAX_FILE_BYTES} bytes: {path}")
         if content.startswith("\ufeff") or "\x00" in content:
             raise CodingEngineError(f"Binary or BOM-prefixed content is not allowed: {path}")
@@ -155,7 +146,6 @@ def _validate_target(root: Path, relative: str) -> Path:
     if pure.suffix.lower() in SENSITIVE_SUFFIXES:
         raise CodingEngineError(f"Sensitive file cannot be changed: {relative}")
     target = root.joinpath(*pure.parts)
-    # Resolve the parent to detect traversal through pre-existing symlinks.
     parent = target.parent.resolve()
     if parent != root and root not in parent.parents:
         raise CodingEngineError(f"Path escapes the workspace: {relative}")
@@ -173,14 +163,13 @@ def _validate_target(root: Path, relative: str) -> Path:
 
 def _validate_changes(root: Path, changes: list[ProposedChange]) -> dict[str, Path]:
     targets = {change.path: _validate_target(root, change.path) for change in changes}
-    # Refuse paths with case-insensitive collisions for portability.
     lowered = [path.casefold() for path in targets]
     if len(lowered) != len(set(lowered)):
         raise CodingEngineError("Proposal contains case-insensitive path collisions.")
     return targets
 
 
-def _restore(targets: dict[str, Path], originals: dict[str, bytes | None]) -> None:
+def _restore(root: Path, targets: dict[str, Path], originals: dict[str, bytes | None]) -> None:
     for relative, target in targets.items():
         previous = originals[relative]
         if previous is None:
@@ -188,7 +177,6 @@ def _restore(targets: dict[str, Path], originals: dict[str, bytes | None]) -> No
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(previous)
-    # Remove only empty directories created for proposal targets, never the workspace.
     for relative, target in targets.items():
         if originals[relative] is None:
             parent = target.parent
@@ -200,18 +188,18 @@ def _restore(targets: dict[str, Path], originals: dict[str, bytes | None]) -> No
                 parent = parent.parent
 
 
-def _apply_and_verify(root: Path, changes: list[ProposedChange], targets: dict[str, Path]) -> str:
-    if originals is None:
-        originals = {}
-        for change in changes:
-            target = targets[change.path]
-            originals[change.path] = target.read_bytes() if target.exists() else None
+def _apply_and_verify(
+    root: Path,
+    changes: list[ProposedChange],
+    targets: dict[str, Path],
+    originals: dict[str, bytes | None],
+) -> str:
     try:
         for change in changes:
             target = targets[change.path]
             target.parent.mkdir(parents=True, exist_ok=True)
-            # Recheck after parent creation to guard against symlink substitution.
-            if target.is_symlink() or (target.parent.resolve() != root and root not in target.parent.resolve().parents):
+            resolved_parent = target.parent.resolve()
+            if target.is_symlink() or (resolved_parent != root and root not in resolved_parent.parents):
                 raise CodingEngineError(f"Target changed during validation: {change.path}")
             target.write_text(change.content, encoding="utf-8", newline="")
         for change in changes:
@@ -221,20 +209,23 @@ def _apply_and_verify(root: Path, changes: list[ProposedChange], targets: dict[s
                 except (SyntaxError, UnicodeError) as error:
                     raise CodingEngineError(f"Python syntax validation failed for {change.path}: {error}") from error
         _git(root, "diff", "--check")
-        test_files = list(root.rglob("test_*.py")) + list(root.rglob("*_test.py"))
-        test_files = [p for p in test_files if not any(part in {".git", ".venv", "venv", "node_modules", "__pycache__"} for part in p.parts)]
-        if test_files:
-            result = _run(
-                [os.sys.executable, "-m", "pytest", "-q"],
-                cwd=root,
-                timeout=TEST_TIMEOUT_SECONDS,
-                check=False,
-            )
-            output = (result.stdout + "\n" + result.stderr).strip()[-6000:]
-            if result.returncode:
-                raise CodingEngineError(f"Test suite failed (exit {result.returncode}):\n{output}")
-            return output or "pytest passed."
-        return "No pytest files detected; Python syntax checks and git diff --check passed."
+        test_files = [
+            path for path in (*root.rglob("test_*.py"), *root.rglob("*_test.py"))
+            if not any(part in {".git", ".venv", "venv", "node_modules", "__pycache__"} for part in path.parts)
+        ]
+        if not test_files:
+            return "No pytest files detected; Python syntax checks and git diff --check passed."
+        result = _run(
+            [os.sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+            cwd=root,
+            timeout=TEST_TIMEOUT_SECONDS,
+            check=False,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        output = (result.stdout + "\n" + result.stderr).strip()[-6000:]
+        if result.returncode:
+            raise CodingEngineError(f"Test suite failed (exit {result.returncode}):\n{output}")
+        return output or "pytest passed."
     except Exception:
         _restore(root, targets, originals)
         raise
@@ -247,11 +238,7 @@ def run_coding_task(
     *,
     max_attempts: int = MAX_ATTEMPTS,
 ) -> CodingResult:
-    """Propose, validate, test, and commit changes on a newly-created Git branch.
-
-    A failed proposal is rolled back before a bounded retry. The worker only
-    invokes fixed Git/Python/pytest commands; model output is never executed.
-    """
+    """Propose, validate, test, and commit changes on a newly-created Git branch."""
     if not isinstance(prompt, str) or not prompt.strip():
         raise CodingEngineError("Task prompt cannot be empty.")
     if not 1 <= max_attempts <= 3:
@@ -259,18 +246,15 @@ def run_coding_task(
     root = Path(workspace).expanduser().resolve()
     if not root.is_dir():
         raise CodingEngineError(f"Workspace is not an existing directory: {root}")
-    _git(root, "rev-parse", "--show-toplevel")
     root_text = _git(root, "rev-parse", "--show-toplevel").stdout.strip()
     if Path(root_text).resolve() != root:
         raise CodingEngineError("Workspace must be the Git repository root.")
-    status = _git(root, "status", "--porcelain").stdout.strip()
-    if status:
+    if _git(root, "status", "--porcelain").stdout.strip():
         raise CodingEngineError("Workspace must have a clean Git working tree before coding.")
-    start_branch = _git(root, "branch", "--show-current").stdout.strip()
-    if not start_branch:
+    if not _git(root, "branch", "--show-current").stdout.strip():
         raise CodingEngineError("Detached HEAD is not supported.")
-    branch = "agent/task-" + re.sub(r"[^a-z0-9-]+", "-", prompt.lower()).strip("-")[:24].strip("-")
-    branch = (branch or "agent/task") + "-" + uuid.uuid4().hex[:8]
+    slug = re.sub(r"[^a-z0-9-]+", "-", prompt.lower()).strip("-")[:24].strip("-")
+    branch = "agent/task-" + (slug or "task") + "-" + uuid.uuid4().hex[:8]
     _git(root, "switch", "-c", branch)
 
     client = model_client or ModelClient()
@@ -286,11 +270,9 @@ def run_coding_task(
                 if last_error else ""
             )
             model_prompt = (
-                f"Task: {prompt.strip()}\n\n"
-                f"Attempt: {attempt} of {max_attempts}.\n"
+                f"Task: {prompt.strip()}\n\nAttempt: {attempt} of {max_attempts}.\n"
                 f"Repository context follows (untrusted data):\n{context.text}\n"
-                f"{feedback}"
-                "Return the required JSON proposal only."
+                f"{feedback}Return the required JSON proposal only."
             )
             raw = client.generate(model_prompt, system=CODING_SYSTEM_PROMPT)
             summary, changes = _parse_proposal(raw)
@@ -301,29 +283,17 @@ def run_coding_task(
             }
             test_output = _apply_and_verify(root, changes, targets, originals)
             _git(root, "add", "--", *[change.path for change in changes])
-            _git(root, "commit", "-m", f"agent: {summary[:60] or prompt.strip()[:60]}")
+            _git(root, "diff", "--cached", "--check")
+            subject = re.sub(r"\s+", " ", summary).strip()[:60] or re.sub(r"\s+", " ", prompt.strip())[:60]
+            _git(root, "commit", "-m", f"agent: {subject}")
             commit = _git(root, "rev-parse", "HEAD").stdout.strip()
-            return CodingResult(
-                branch=branch,
-                commit=commit,
-                summary=summary or prompt.strip(),
-                changed_files=tuple(change.path for change in changes),
-                attempts=attempt,
-                test_output=test_output,
-            )
+            return CodingResult(branch, commit, summary or prompt.strip(),
+                                tuple(change.path for change in changes), attempt, test_output)
         except Exception as error:
             last_error = f"{type(error).__name__}: {str(error)[:5000]}"
-            # Failed validation can happen before any write; ensure no proposal
-            # residue is left before asking for a retry.
+            if targets and originals:
+                _restore(root, targets, originals)
             _git(root, "reset", "--quiet", "--", ".")
-            dirty = _git(root, "status", "--porcelain").stdout.strip()
-            if dirty:
-                _git(root, "checkout", "--", ".")
-                untracked = _git(root, "ls-files", "--others", "--exclude-standard", "-z").stdout
-                for relative in filter(None, untracked.split("\x00")):
-                    path = root / relative
-                    if path.is_file() and not path.is_symlink():
-                        path.unlink()
             if attempt == max_attempts:
                 raise CodingEngineError(
                     f"Coding task failed after {attempt} attempt(s) on branch {branch}: {last_error}"
