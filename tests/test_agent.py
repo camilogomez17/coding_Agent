@@ -193,6 +193,6 @@ def test_task_purge_failed_requires_confirmation_and_deletes_failed_records(
 
     result = agent.main(["task", "purge-failed", "--yes"])
     assert result == 0
-    assert "Deleted 1 failed task record(s)." in capsys.readouterr().out
+    assert "Deleted 1 failed task record(s) and cleared saved failure details." in capsys.readouterr().out
     assert TaskQueue(queue_path).list_tasks() == []
 
