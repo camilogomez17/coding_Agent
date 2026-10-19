@@ -172,3 +172,19 @@ def test_purge_failed_refuses_to_break_live_task_dependencies(tmp_path):
     assert tasks[1].status == "pending"
     assert tasks[1].depends_on == plan[0].id
 
+def test_purge_failed_clears_saved_failure_details_from_retryable_tasks(tmp_path):
+    queue = TaskQueue(tmp_path / "tasks.json", max_attempts=2)
+    task = queue.enqueue("Retryable task", tmp_path)
+    queue.claim_next()
+    retried = queue.fail(task.id, "Temporary failure", retry=True)
+    assert retried.status == "pending"
+    assert retried.error == "Temporary failure"
+    assert any(event["action"] == "failed" for event in retried.history)
+
+    assert queue.purge_failed() == 0
+    cleaned = queue.list_tasks()[0]
+    assert cleaned.status == "pending"
+    assert cleaned.attempts == 1
+    assert cleaned.error is None
+    assert all(event["action"] != "failed" for event in cleaned.history)
+
