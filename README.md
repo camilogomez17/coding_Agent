@@ -66,6 +66,7 @@ Queue a read-only diagnostic or coding task:
 ```bash
 python agent.py task add --workspace /path/to/project "Find likely bugs and suggest fixes"
 python agent.py task add --workspace /path/to/project --mode code "Fix the parser tests"
+python agent.py task add --workspace /path/to/project --mode code --allow-path parser.py --allow-path tests/test_parser.py "Fix the parser tests"
 python agent.py task add --workspace /path/to/project --mode code --publish "Fix the parser tests and open a PR"
 python agent.py task list
 python agent.py task list --status pending
@@ -107,7 +108,7 @@ Queue state defaults to `~/.coding_agent/tasks.json`. Set `AGENT_QUEUE_PATH` to 
 
 ## Restricted coding mode and safety limits
 
-Coding tasks require a Git repository root with a clean working tree. The engine creates a unique local branch named `agent/task-...`. Model output must be JSON containing complete file contents. Each proposal is limited to five files, 64 KB per file, and 200 KB total. Only selected text extensions are accepted; traversal, symlinks, secret-like paths, Git metadata, workflow files, and dependency lockfiles are blocked. The model cannot supply shell commands for execution. Add `--publish` to a `--mode code` task to request branch publication and pull-request creation after local verification. The repository must have an `origin` remote, the `gh` GitHub CLI must be installed and authenticated, and the branch must be pushable. The agent pushes only its task branch and never merges a pull request. If publication fails, the coding task remains successful locally and the saved report explains the publication error.
+Coding tasks require a Git repository root with a clean working tree. The engine creates a unique local branch named `agent/task-...`. Model output must be JSON containing complete file contents. Each proposal is limited to five files, 64 KB per file, and 200 KB total. Only selected text extensions are accepted; traversal, symlinks, secret-like paths, Git metadata, workflow files, and dependency lockfiles are blocked. Use repeated `--allow-path` options to enforce an exact per-task file allowlist; the engine rejects proposals that touch any other path. Without this option, no task-specific allowlist is applied. The model cannot supply shell commands for execution. Add `--publish` to a `--mode code` task to request branch publication and pull-request creation after local verification. The repository must have an `origin` remote, the `gh` GitHub CLI must be installed and authenticated, and the branch must be pushable. The agent pushes only its task branch and never merges a pull request. If publication fails, the coding task remains successful locally and the saved report explains the publication error.
 
 Python files are syntax-checked. If tests exist, `python -m pytest -q` runs with a 90-second timeout. Failed proposals are rolled back and retried within a hard cap of three attempts. Successful changes are committed on the task branch.
 
