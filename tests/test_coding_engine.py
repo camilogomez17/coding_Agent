@@ -89,6 +89,7 @@ def test_engine_commits_verified_changes_on_new_branch(tmp_path):
     # The first proposal fails tests, is rolled back, and the retry passes.
     result = run_coding_task(root, "Make answer return 2", model, max_attempts=2)
 
+    assert "Test suite failed" in model.prompts[1][0]
     assert result.branch.startswith("agent/task-make-answer-return-2-")
     assert result.branch != "main"
     assert result.attempts == 2
