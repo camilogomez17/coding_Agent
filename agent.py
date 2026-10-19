@@ -52,6 +52,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--publish", action="store_true",
         help="Push the verified coding branch and open a GitHub pull request (requires git remote origin and authenticated gh CLI).",
     )
+    add_parser.add_argument(
+        "--allow-path", action="append", default=[],
+        help="Restrict coding changes to this exact relative path; repeat to allow multiple files.",
+    )
     add_parser.add_argument("prompt", nargs="+")
 
     plan_parser = task_commands.add_parser("plan", help="Plan a high-level objective into dependent coding tasks.")
@@ -113,7 +117,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.publish and args.mode != "code":
                 raise QueueError("--publish requires --mode code.")
             task = queue.enqueue(
-                " ".join(args.prompt), args.workspace, kind=args.mode, publish=args.publish
+                " ".join(args.prompt), args.workspace, kind=args.mode,
+                publish=args.publish, allowed_paths=args.allow_path or None,
             )
             print(f"Queued task {task.id}")
             print(f"Workspace: {task.workspace}")
@@ -194,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Prompt: {task.prompt}")
             print(f"Kind: {task.kind}")
             print(f"Publish: {'enabled' if task.publish else 'disabled'}")
+            if task.allowed_paths:
+                print(f"Allowed paths: {', '.join(task.allowed_paths)}")
             if task.plan_id:
                 print(f"Plan: {task.plan_id} (step {task.step_index}, depends on {task.depends_on})")
             if task.history:
