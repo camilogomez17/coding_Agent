@@ -26,6 +26,7 @@ def run_next_coding_task(
             task.prompt,
             model_client=model_client or ModelClient(),
             max_attempts=max_attempts,
+            allowed_paths=task.allowed_paths or None,
         )
         report = (
             f"Summary: {result.summary}\n"
