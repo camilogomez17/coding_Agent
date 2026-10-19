@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-STATUSES = {"pending", "running", "succeeded", "failed"}
+STATUSES = {"pending", "running", "succeeded", "failed", "cancelled"}
 KINDS = {"diagnose", "code"}
 MAX_PLAN_STEPS = 20
 
@@ -79,13 +79,18 @@ class TaskQueue:
 
     def _load(self) -> dict:
         if not self.path.exists():
-            return {"version": 1, "tasks": []}
+            return {"version": 1, "tasks": [], "control": {"paused": False, "cancel_requested": False}}
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise QueueError("Task queue file is unreadable or invalid JSON.") from error
         if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("tasks"), list):
             raise QueueError("Task queue file has an unsupported structure.")
+        control = data.setdefault("control", {"paused": False, "cancel_requested": False})
+        if not isinstance(control, dict) or not isinstance(control.get("paused", False), bool) or not isinstance(control.get("cancel_requested", False), bool):
+            raise QueueError("Task queue contains invalid runtime control metadata.")
+        control.setdefault("paused", False)
+        control.setdefault("cancel_requested", False)
         seen_ids = set()
         for item in data["tasks"]:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):
@@ -250,6 +255,8 @@ class TaskQueue:
             normalized.append(step.strip())
         with self._locked():
             data = self._load()
+            if data["control"].get("paused") or data["control"].get("cancel_requested"):
+                return None
             by_id = {item["id"]: item for item in data["tasks"]}
             current = by_id.get(completed_task_id)
             if current is None:
@@ -329,6 +336,45 @@ class TaskQueue:
             self._save(data)
             return original_count - len(data["tasks"])
 
+
+    def runtime_control(self) -> dict:
+        """Return persisted supervisor controls and live task counts."""
+        with self._locked():
+            data = self._load()
+            control = dict(data["control"])
+            control["running_tasks"] = [item["id"] for item in data["tasks"] if item["status"] == "running"]
+            control["counts"] = {status: sum(1 for item in data["tasks"] if item["status"] == status) for status in sorted(STATUSES)}
+            return control
+
+    def set_paused(self, paused: bool) -> dict:
+        """Pause or resume future task claims without interrupting active work."""
+        if not isinstance(paused, bool):
+            raise QueueError("paused must be a boolean.")
+        with self._locked():
+            data = self._load()
+            data["control"]["paused"] = paused
+            data["control"]["cancel_requested"] = False
+            self._save(data)
+            return dict(data["control"])
+
+    def request_cancel(self) -> int:
+        """Stop the supervisor after active work finishes and cancel pending tasks."""
+        with self._locked():
+            data = self._load()
+            data["control"]["cancel_requested"] = True
+            data["control"]["paused"] = False
+            cancelled = 0
+            now = _now()
+            for item in data["tasks"]:
+                if item["status"] == "pending":
+                    item["status"] = "cancelled"
+                    item["error"] = "Cancelled by operator before execution."
+                    item["updated_at"] = now
+                    item.setdefault("history", []).append(_event("cancelled", item["error"]))
+                    cancelled += 1
+            self._save(data)
+            return cancelled
+
     def list_tasks(self, status: str | None = None) -> list[Task]:
         if status is not None and status not in STATUSES:
             raise QueueError(f"Unknown task status: {status}")
@@ -357,9 +403,9 @@ class TaskQueue:
                         item.setdefault("history", []).append(_event("blocked", item["error"]))
                         changed = True
                         continue
-                    if dependency["status"] == "failed":
+                    if dependency["status"] in {"failed", "cancelled"}:
                         item["status"] = "failed"
-                        item["error"] = f"Blocked because prerequisite {dependency_id} failed."
+                        item["error"] = f"Blocked because prerequisite {dependency_id} ended unsuccessfully."
                         item["updated_at"] = _now()
                         item.setdefault("history", []).append(_event("blocked", item["error"]))
                         changed = True
