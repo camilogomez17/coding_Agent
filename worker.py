@@ -15,38 +15,49 @@ IGNORED_DIRS = {
 
 
 def find_files(repo: Path, suffix: str) -> list[Path]:
+    """Find files with the requested suffix, skipping generated directories."""
     found = []
 
     def walk(directory: Path) -> None:
         try:
-            entries = list(directory.iterdir())
-        except PermissionError:
+            entries = sorted(directory.iterdir())
+        except OSError:
+            # Unreadable directories should not stop the whole scan.
             return
 
         for entry in entries:
-            if entry.is_dir():
-                if entry.name not in IGNORED_DIRS:
-                    walk(entry)
-            elif entry.suffix == suffix:
-                found.append(entry)
+            try:
+                # Do not follow symlinks: they can lead outside the repository
+                # or create directory loops.
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir():
+                    if entry.name not in IGNORED_DIRS:
+                        walk(entry)
+                elif entry.suffix == suffix:
+                    found.append(entry)
+            except OSError:
+                # A file may disappear or become inaccessible during a scan.
+                continue
 
     walk(repo)
-    return sorted(found)
+    return found
 
 
-def inspect_repository(root: str) -> None:
+def inspect_repository(root: str) -> int:
+    """Inspect a repository and return 0 on success, 1 when checks fail."""
     repo = Path(root).resolve()
 
     if not repo.is_dir():
         print(f"Error: directory not found: {repo}")
-        return
+        return 1
 
     print(f"Repository: {repo}")
 
     python_files = find_files(repo, ".py")
     print(f"\nPython files found: {len(python_files)}")
 
-    # Check Python syntax without executing the files.
+    # Parse source without executing it.
     syntax_errors = []
 
     for file in python_files:
@@ -68,6 +79,8 @@ def inspect_repository(root: str) -> None:
     else:
         print("PASS: No Python syntax errors found.")
 
+    exit_code = 1 if syntax_errors else 0
+
     # Only run pytest when a test suite appears to exist.
     test_files = [
         file
@@ -79,21 +92,34 @@ def inspect_repository(root: str) -> None:
     if not test_files:
         print("SKIP: No test files detected.")
     else:
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            print("FAIL: pytest timed out after 120 seconds.")
+            return 1
+        except OSError as error:
+            print(f"FAIL: Could not start pytest: {error}")
+            return 1
 
-        print(result.stdout)
+        if result.stdout:
+            print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
         if result.stderr:
-            print(result.stderr)
+            print(result.stderr, end="" if result.stderr.endswith("\n") else "\n")
 
         print(f"Pytest exit code: {result.returncode}")
+        if result.returncode != 0:
+            exit_code = 1
+
+    return exit_code
 
 
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "."
-    inspect_repository(target)
+    raise SystemExit(inspect_repository(target))
