@@ -22,6 +22,7 @@ def plan_objective(
     model_client: Any | None = None,
     *,
     publish: bool = False,
+    allowed_paths: list[str] | None = None,
 ) -> list[Task]:
     """Plan an objective and atomically enqueue sequential coding steps."""
     if not objective or not objective.strip():
@@ -45,4 +46,6 @@ def plan_objective(
         raise QueueError("Planner must return between 2 and 8 steps.")
     if any(not isinstance(step, str) or not step.strip() or len(step) > 2000 for step in steps):
         raise QueueError("Each planned step must be a non-empty string of at most 2000 characters.")
-    return queue.enqueue_plan(objective, workspace, steps, publish=publish)
+    return queue.enqueue_plan(
+        objective, workspace, steps, publish=publish, allowed_paths=allowed_paths
+    )
