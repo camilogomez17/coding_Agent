@@ -4,6 +4,7 @@ import pytest
 
 from task_queue import QueueError, TaskQueue
 from planner import adapt_completed_step
+import coding_worker
 
 
 def test_enqueue_persists_task_and_normalizes_workspace(tmp_path):
@@ -148,6 +149,66 @@ def test_recovery_requeues_publication_for_verified_commit(tmp_path):
     assert commit in recovered.result
     assert any(event["action"] == "verified_commit" for event in recovered.history)
     assert "publication must be retried" in recovered.history[-1]["detail"]
+
+
+def test_coding_worker_retries_publication_without_rerunning_engine(tmp_path, monkeypatch):
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True,
+            capture_output=True, text=True,
+        )
+
+    git("init", "-b", "main")
+    git("config", "user.name", "Coding Agent Tests")
+    git("config", "user.email", "coding-agent-tests@example.invalid")
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    git("add", "app.py")
+    git("commit", "-m", "initial")
+
+    queue = TaskQueue(tmp_path / "tasks.json", max_attempts=3)
+    task = queue.enqueue("Implement feature", tmp_path, kind="code", publish=True)
+    claimed = queue.claim_next(kind="code")
+    git("switch", "-c", "agent/task-publish-retry")
+    (tmp_path / "app.py").write_text("value = 2\n", encoding="utf-8")
+    git("add", "app.py")
+    git("commit", "-m", "agent: implement feature",
+        "-m", f"Coding-Agent-Task: {task.id}")
+    commit = git("rev-parse", "HEAD").stdout.strip()
+    report = (
+        "Summary: Implement feature\n"
+        "Branch: agent/task-publish-retry\n"
+        "Base branch: main\n"
+        f"Commit: {commit}\n"
+        "Changed files: app.py\n"
+        "Engine attempts: 1\nVerification: passed"
+    )
+    queue.annotate_task(task.id, report, action="verified_commit")
+    claimed = queue.list_tasks()[0]
+    calls = []
+
+    def fake_publish(workspace, **kwargs):
+        calls.append((workspace, kwargs))
+        return "https://github.com/example/repo/pull/23"
+
+    monkeypatch.setattr(coding_worker, "publish_existing_branch", fake_publish)
+    monkeypatch.setattr(
+        coding_worker, "run_coding_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("coding engine must not rerun for a verified commit")
+        ),
+    )
+
+    completed = coding_worker.run_next_coding_task(
+        queue, model_client=object(), claimed_task=claimed
+    )
+
+    assert completed.status == "succeeded"
+    assert "https://github.com/example/repo/pull/23" in completed.result
+    assert len(calls) == 1
+    assert calls[0][1]["commit"] == commit
+    assert calls[0][1]["branch"] == "agent/task-publish-retry"
 
 
 def test_recovery_completes_task_with_verified_commit_checkpoint(tmp_path):
