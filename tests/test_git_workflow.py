@@ -186,4 +186,4 @@ def test_publication_retry_recovers_crash_after_push_before_pr_lookup(tmp_path, 
     url = git_workflow.publish_branch(root, **kwargs)
     assert url == "https://github.com/example/repo/pull/42"
     assert len([call for call in calls if call[:2] == ["git", "push"]]) == 2
-    assert len([call for call in calls if call[:3] == ["gh", "pr", "create"]]) == 0
+    assert len([call for call in calls if call[:3] == ["gh", "pr", "create"]]) == 1
