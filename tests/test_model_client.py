@@ -56,6 +56,7 @@ def test_local_mode_posts_to_ollama_and_returns_content(monkeypatch):
         {"role": "user", "content": "Explain this code"},
     ]
     assert seen["payload"]["stream"] is False
+    assert seen["payload"]["format"] == "json"
     assert seen["timeout"] == 3
 
 
