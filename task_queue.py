@@ -49,6 +49,8 @@ class Task:
     history: list[dict] = field(default_factory=list)
     publish: bool = False
     allowed_paths: list[str] = field(default_factory=list)
+    adaptive_plan: bool = False
+    plan_objective: str | None = None
 
 
 class TaskQueue:
@@ -100,9 +102,13 @@ class TaskQueue:
             item.setdefault("depends_on", None)
             item.setdefault("publish", False)
             item.setdefault("allowed_paths", [])
+            item.setdefault("adaptive_plan", False)
+            item.setdefault("plan_objective", None)
             if (item["kind"] not in KINDS or not isinstance(item["history"], list)
                     or not isinstance(item["publish"], bool)
                     or not isinstance(item["allowed_paths"], list)
+                    or not isinstance(item["adaptive_plan"], bool)
+                    or (item["plan_objective"] is not None and not isinstance(item["plan_objective"], str))
                     or not all(isinstance(path, str) and path.strip() for path in item["allowed_paths"])):
                 raise QueueError("Task queue contains invalid task metadata.")
         return data
@@ -136,7 +142,8 @@ class TaskQueue:
         self, prompt: str, workspace: str | Path, *, kind: str = "diagnose",
         plan_id: str | None = None, step_index: int | None = None,
         depends_on: str | None = None, publish: bool = False,
-        allowed_paths: list[str] | None = None,
+        allowed_paths: list[str] | None = None, adaptive_plan: bool = False,
+        plan_objective: str | None = None,
     ) -> Task:
         if not prompt or not prompt.strip():
             raise QueueError("Task prompt cannot be empty.")
@@ -158,7 +165,8 @@ class TaskQueue:
                 status="pending", attempts=0, created_at=now, updated_at=now,
                 kind=kind, plan_id=plan_id, step_index=step_index, depends_on=depends_on,
                 history=[_event("queued")], publish=publish,
-                allowed_paths=list(allowed_paths or []),
+                allowed_paths=list(allowed_paths or []), adaptive_plan=adaptive_plan,
+                plan_objective=plan_objective,
             )
             data["tasks"].append(asdict(task))
             self._save(data)
@@ -166,7 +174,7 @@ class TaskQueue:
 
     def enqueue_plan(
         self, objective: str, workspace: str | Path, steps: list[str], *, publish: bool = False,
-        allowed_paths: list[str] | None = None,
+        allowed_paths: list[str] | None = None, adaptive: bool = False,
     ) -> list[Task]:
         """Persist an ordered coding plan atomically; each step depends on its predecessor."""
         if not objective or not objective.strip():
@@ -203,10 +211,69 @@ class TaskQueue:
                     step_index=index, depends_on=previous_id,
                     history=[_event("queued", f"plan step {index}/{len(normalized)}")],
                     publish=publish, allowed_paths=list(allowed_paths or []),
+                    adaptive_plan=adaptive, plan_objective=objective.strip(),
                 )
                 data["tasks"].append(asdict(task))
                 created.append(task)
                 previous_id = task.id
+            self._save(data)
+            return created
+
+
+    def revise_pending_plan(self, completed_task_id: str, steps: list[str]) -> list[Task]:
+        """Replace only the unstarted tail of an adaptive plan after a successful step."""
+        if not isinstance(steps, list) or len(steps) > 8:
+            raise QueueError("An adaptive plan must contain between 0 and 8 steps.")
+        normalized = []
+        for step in steps:
+            if not isinstance(step, str) or not step.strip() or len(step) > 2000:
+                raise QueueError("Each adaptive step must be non-empty and at most 2000 characters.")
+            normalized.append(step.strip())
+        with self._locked():
+            data = self._load()
+            by_id = {item["id"]: item for item in data["tasks"]}
+            current = by_id.get(completed_task_id)
+            if current is None:
+                raise QueueError(f"Task not found: {completed_task_id}")
+            if current["status"] != "succeeded" or not current.get("adaptive_plan"):
+                raise QueueError("Adaptive replanning requires a succeeded adaptive-plan step.")
+            plan_id = current.get("plan_id")
+            if not plan_id or not current.get("plan_objective"):
+                raise QueueError("Adaptive plan metadata is missing.")
+            later = [
+                item for item in data["tasks"]
+                if item.get("plan_id") == plan_id
+                and (item.get("step_index") or 0) > current["step_index"]
+            ]
+            if any(item["status"] != "pending" for item in later):
+                raise QueueError("Cannot revise a plan after a later step has started.")
+            data["tasks"] = [item for item in data["tasks"] if item not in later]
+            now = _now()
+            created = []
+            previous_id = completed_task_id
+            start_index = current["step_index"] + 1
+            for offset, step in enumerate(normalized):
+                index = start_index + offset
+                task = Task(
+                    id=uuid.uuid4().hex,
+                    prompt=(f"Overall objective: {current['plan_objective']}\\n"
+                            f"Plan step {index}: {step}\\n"
+                            "Implement only this step. Respect repository constraints and verify your changes."),
+                    workspace=current["workspace"], status="pending", attempts=0,
+                    created_at=now, updated_at=now, kind="code", plan_id=plan_id,
+                    step_index=index, depends_on=previous_id,
+                    history=[_event("queued", f"adaptive plan step {index}")],
+                    publish=current.get("publish", False),
+                    allowed_paths=list(current.get("allowed_paths", [])),
+                    adaptive_plan=True, plan_objective=current["plan_objective"],
+                )
+                data["tasks"].append(asdict(task))
+                created.append(task)
+                previous_id = task.id
+            current.setdefault("history", []).append(
+                _event("plan_revised", f"Replaced {len(later)} pending step(s) with {len(created)} adaptive step(s).")
+            )
+            current["updated_at"] = now
             self._save(data)
             return created
 
