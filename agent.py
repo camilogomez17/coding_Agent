@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 
+from coding_worker import run_next_coding_task
 from diagnostic_worker import run_next_diagnostic
 from model_client import ModelClient, ModelError
 from task_queue import QueueError, TaskQueue
@@ -46,6 +47,10 @@ def _build_parser() -> argparse.ArgumentParser:
     task_commands.add_parser(
         "diagnose",
         help="Run one queued task as a read-only model-assisted diagnosis.",
+    )
+    task_commands.add_parser(
+        "code",
+        help="Run one queued task through the restricted coding engine.",
     )
 
     show_parser = task_commands.add_parser("show", help="Show a task's saved result or error.")
@@ -91,6 +96,22 @@ def main(argv: list[str] | None = None) -> int:
                 if task.error:
                     print(f"  Last error: {task.error}")
             return 0
+
+        if args.task_command == "code":
+            task = run_next_coding_task(queue)
+            if task is None:
+                print("No pending tasks to code.")
+                return 0
+            print(f"Task: {task.id}")
+            print(f"Status: {task.status}")
+            if task.status == "succeeded":
+                print("\\nCoding report:\\n")
+                print(task.result or "(The coding engine returned an empty report.)")
+                return 0
+            print(f"Coding failed: {task.error}", file=sys.stderr)
+            if task.status == "pending":
+                print("The task was requeued for a later retry.", file=sys.stderr)
+            return 1
 
         if args.task_command == "diagnose":
             task = run_next_diagnostic(queue)
