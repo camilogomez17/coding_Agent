@@ -128,8 +128,8 @@ The Python model interface is `ModelClient().generate(prompt, system=None)` in `
 
 1. Model client, CLI, durable queue, and repeatable checks.
 2. Bounded read-only repository context and diagnostic reports (implemented).
-3. Restricted edit worker with diff review and verification.
-4. A single-task worker loop with retry budgets, cancellation, and run history.
+3. Restricted coding worker with bounded proposals, branch isolation, tests, and retries (implemented).
+4. A supervised worker loop with cancellation and run history.
 5. Resource limits, process supervision, and safe restart behavior.
 6. Optional launch-at-login setup for unattended operation.
 
