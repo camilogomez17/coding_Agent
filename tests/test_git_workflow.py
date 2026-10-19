@@ -137,3 +137,53 @@ def test_publish_existing_branch_reuses_verified_commit_without_creating_another
         ["git", "status", "--porcelain"], cwd=root, check=True,
         capture_output=True, text=True,
     ).stdout.strip() == ""
+
+
+
+def test_publication_retry_recovers_crash_after_push_before_pr_lookup(tmp_path, monkeypatch):
+    root = make_repo(tmp_path)
+    original_run = git_workflow._run
+    state = {"fail_lookup_once": True, "pr_exists": False}
+    calls = []
+
+    def fake_run(args, *, cwd, timeout=30, check=True):
+        calls.append(args)
+        if args[:3] == ["gh", "auth", "status"]:
+            return subprocess.CompletedProcess(args, 0, "Logged in", "")
+        if args[:2] == ["git", "push"]:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[:3] == ["gh", "pr", "view"]:
+            if state["fail_lookup_once"]:
+                state["fail_lookup_once"] = False
+                raise git_workflow.GitPublishError("simulated crash after push")
+            if state["pr_exists"]:
+                return subprocess.CompletedProcess(
+                    args, 0, "https://github.com/example/repo/pull/42\n", ""
+                )
+            return subprocess.CompletedProcess(args, 1, "", "no pull request")
+        if args[:3] == ["gh", "pr", "create"]:
+            state["pr_exists"] = True
+            return subprocess.CompletedProcess(
+                args, 0, "https://github.com/example/repo/pull/42\n", ""
+            )
+        return original_run(args, cwd=cwd, timeout=timeout, check=check)
+
+    monkeypatch.setattr(git_workflow, "_run", fake_run)
+    kwargs = dict(
+        branch="agent/task-test",
+        base_branch="main",
+        title="Agent: Test change",
+        summary="Test summary",
+        commit="abc123",
+        changed_files=("README.md",),
+    )
+    try:
+        git_workflow.publish_branch(root, **kwargs)
+        assert False, "first publication attempt should simulate interruption"
+    except git_workflow.GitPublishError as error:
+        assert "simulated crash after push" in str(error)
+
+    url = git_workflow.publish_branch(root, **kwargs)
+    assert url == "https://github.com/example/repo/pull/42"
+    assert len([call for call in calls if call[:2] == ["git", "push"]]) == 2
+    assert len([call for call in calls if call[:3] == ["gh", "pr", "create"]]) == 0
