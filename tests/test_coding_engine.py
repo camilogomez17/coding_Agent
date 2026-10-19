@@ -173,7 +173,7 @@ def test_engine_accepts_detached_worktree_with_explicit_base_branch(tmp_path):
     root = make_repo(tmp_path)
     base_commit = git(root, "rev-parse", "HEAD").stdout.strip()
     git(root, "switch", "--detach", base_commit)
-    model = FakeModel(proposal("app.py", "def answer():\n    return 2\n", "Update answer"))
+    model = FakeModel(proposal("app.py", "def answer():\n    \"\"\"Document the answer function.\"\"\"\n    return 1\n", "Update answer"))
 
     result = run_coding_task(
         root,
