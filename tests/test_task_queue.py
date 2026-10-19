@@ -3,6 +3,7 @@ import json
 import pytest
 
 from task_queue import QueueError, TaskQueue
+from planner import adapt_completed_step
 
 
 def test_enqueue_persists_task_and_normalizes_workspace(tmp_path):
@@ -222,3 +223,39 @@ def test_adaptive_plan_can_finish_early_by_removing_remaining_steps(tmp_path):
     assert queue.revise_pending_plan(completed.id, []) == []
     assert queue.list_tasks(status="pending") == []
     assert len(queue.list_tasks(status="succeeded")) == 1
+
+
+
+def test_adaptive_planner_uses_verified_result_to_revise_plan(tmp_path):
+    queue = TaskQueue(tmp_path / "tasks.json")
+    initial = queue.enqueue_plan(
+        "Improve parser", tmp_path, ["Inspect parser", "Implement broad refactor", "Add tests"],
+        adaptive=True,
+    )
+    queue.claim_next(kind="code")
+    completed = queue.complete(initial[0].id, result="Existing parser already handles most cases.")
+
+    class FakeModelClient:
+        def __init__(self):
+            self.prompt = None
+            self.system = None
+
+        def generate(self, prompt, system=None):
+            self.prompt = prompt
+            self.system = system
+            return '{"steps":["Fix one uncovered edge case","Add regression test"]}'
+
+    client = FakeModelClient()
+    revised = adapt_completed_step(
+        queue, completed, "Verified: no refactor needed; one edge case remains.", model_client=client
+    )
+
+    assert "Verified: no refactor needed; one edge case remains." in client.prompt
+    assert "Implement broad refactor" in client.prompt
+    assert len(revised) == 2
+    assert "Fix one uncovered edge case" in revised[0].prompt
+    assert revised[1].depends_on == revised[0].id
+    annotated = queue.annotate_task(
+        completed.id, "Adaptive replanning: 2 remaining step(s) queued.", action="plan_revised"
+    )
+    assert "Adaptive replanning: 2 remaining step(s) queued." in annotated.result
