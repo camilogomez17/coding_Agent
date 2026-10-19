@@ -89,8 +89,13 @@ def test_engine_commits_verified_changes_on_new_branch(tmp_path):
     model = FakeModel(proposal("app.py", "def answer():\n    return 2\n", "Change answer"),
                       proposal("app.py", "def answer():\n    \"\"\"Return the expected answer.\"\"\"\n    return 1\n", "Retry with passing implementation"))
     # The first proposal fails tests, is rolled back, and the retry passes.
-    result = run_coding_task(root, "Make answer return 2", model, max_attempts=2)
+    checkpoints = []
+    result = run_coding_task(
+        root, "Make answer return 2", model, max_attempts=2,
+        on_verified_commit=checkpoints.append,
+    )
 
+    assert checkpoints == [result]
     assert "Test suite failed" in model.prompts[1][0]
     assert result.branch.startswith("agent/task-make-answer-return-2-")
     assert result.branch != "main"
