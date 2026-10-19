@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import signal
 import sys
 import threading
 from pathlib import Path
@@ -116,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             for task in tasks:
                 print(
-                    f"{task.id}  {task.status:<9} attempts={task.attempts} "
+                    f"{task.id}  {task.status:<9} kind={task.kind:<8} attempts={task.attempts} "
                     f"workspace={task.workspace}"
                 )
                 if task.plan_id:
@@ -197,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Recovered {count} interrupted task(s).")
             return 0
 
-    except (ModelError, QueueError, OSError) as error:
+    except (ModelError, QueueError, OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 
