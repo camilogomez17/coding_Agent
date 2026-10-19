@@ -48,10 +48,18 @@ def _build_parser() -> argparse.ArgumentParser:
     add_parser = task_commands.add_parser("add", help="Queue a task without executing it.")
     add_parser.add_argument("--workspace", required=True)
     add_parser.add_argument("--mode", choices=["diagnose", "code"], default="diagnose")
+    add_parser.add_argument(
+        "--publish", action="store_true",
+        help="Push the verified coding branch and open a GitHub pull request (requires git remote origin and authenticated gh CLI).",
+    )
     add_parser.add_argument("prompt", nargs="+")
 
     plan_parser = task_commands.add_parser("plan", help="Plan a high-level objective into dependent coding tasks.")
     plan_parser.add_argument("--workspace", required=True)
+    plan_parser.add_argument(
+        "--publish", action="store_true",
+        help="Publish each verified plan step as a pull request (requires git remote origin and authenticated gh CLI).",
+    )
     plan_parser.add_argument("objective", nargs="+")
 
     list_parser = task_commands.add_parser("list", help="List queued tasks.")
@@ -102,7 +110,11 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 restore_handlers()
         if args.task_command == "add":
-            task = queue.enqueue(" ".join(args.prompt), args.workspace, kind=args.mode)
+            if args.publish and args.mode != "code":
+                raise QueueError("--publish requires --mode code.")
+            task = queue.enqueue(
+                " ".join(args.prompt), args.workspace, kind=args.mode, publish=args.publish
+            )
             print(f"Queued task {task.id}")
             print(f"Workspace: {task.workspace}")
             print(f"Status: {task.status}")
@@ -120,13 +132,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 if task.plan_id:
                     print(f"  Plan: {task.plan_id} step={task.step_index} depends_on={task.depends_on}")
+                if task.publish:
+                    print("  Publish: enabled")
                 print(f"  {task.prompt}")
                 if task.error:
                     print(f"  Last error: {task.error}")
             return 0
 
         if args.task_command == "plan":
-            tasks = plan_objective(queue, args.workspace, " ".join(args.objective))
+            tasks = plan_objective(
+                queue, args.workspace, " ".join(args.objective), publish=args.publish
+            )
             print(f"Created plan {tasks[0].plan_id} with {len(tasks)} dependent coding steps.")
             for task in tasks:
                 print(f"{task.step_index}. {task.prompt.splitlines()[1]} [{task.id}]")
@@ -177,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Workspace: {task.workspace}")
             print(f"Prompt: {task.prompt}")
             print(f"Kind: {task.kind}")
+            print(f"Publish: {'enabled' if task.publish else 'disabled'}")
             if task.plan_id:
                 print(f"Plan: {task.plan_id} (step {task.step_index}, depends on {task.depends_on})")
             if task.history:
