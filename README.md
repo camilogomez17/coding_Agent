@@ -13,7 +13,7 @@ A local-first coding-agent runtime for repository inspection, task planning, bou
 - Runs read-only diagnostic tasks or restricted coding tasks from the same queue.
 - Applies bounded model-proposed file changes on a dedicated Git branch, checks Python syntax, runs pytest when tests are present, rolls back failed proposals, retries within strict limits, and commits verified changes.
 - Optionally pushes a verified task branch to `origin` and creates or reuses a GitHub pull request through the authenticated GitHub CLI; publishing is opt-in per task and never merges.
-- Provides a persistent supervisor loop with idle polling and graceful SIGINT/SIGTERM shutdown after the active task completes.
+- Provides a persistent supervisor loop with idle polling, graceful SIGINT/SIGTERM shutdown, persistent pause/resume controls, pending-task cancellation, and live queue status.
 - Runs the test suite in GitHub Actions.
 
 ## Requirements
@@ -71,6 +71,10 @@ python agent.py task add --workspace /path/to/project --mode code --publish "Fix
 python agent.py task list
 python agent.py task list --status pending
 python agent.py task show TASK_ID
+python agent.py task status
+python agent.py task pause
+python agent.py task resume
+python agent.py task cancel
 python agent.py task purge-failed --yes
 ```
 
@@ -99,7 +103,7 @@ Start the persistent supervisor:
 python agent.py serve
 ```
 
-The supervisor polls the queue every five seconds by default and processes both diagnostic and coding tasks. It recovers interrupted tasks once at startup, records task events, waits when idle, and handles Ctrl-C/SIGTERM by stopping after the active task finishes. For a bounded smoke test:
+The supervisor polls the queue every five seconds by default and processes both diagnostic and coding tasks. It recovers interrupted tasks once at startup, records task events, waits when idle, and handles Ctrl-C/SIGTERM by stopping after the active task finishes. `python agent.py task status` shows persisted queue counts and running/pending work. `task pause` prevents new claims while active work finishes; `task resume` resumes claims. `task cancel` marks pending tasks cancelled and asks the supervisor to exit after any active task finishes. These controls are shared through the queue file, so use one supervisor per queue as usual. For a bounded smoke test:
 
 ```bash
 python agent.py serve --poll-interval 1 --max-tasks 1
@@ -117,7 +121,7 @@ Python files are syntax-checked. If tests exist, `python -m pytest -q` runs with
 
 **Important limitations:**
 
-- The supervisor is a single-host process, not a hosted service. It stops when the host shuts down unless configured under an appropriate process manager on an always-on machine.
+- The supervisor is a single-host process, not a hosted service. It stops when the host shuts down unless configured under an appropriate process manager on an always-on machine. Pause and cancellation are cooperative: they do not forcibly terminate a model request, test process, or currently running coding task.
 - The current planner sequences small coding tasks; it does not dynamically re-plan based on arbitrary results or guarantee that a broad objective can be completed.
 - The coding engine uses bounded complete-file proposals rather than general-purpose patch hunks.
 - Tests execute repository code. The current engine does not provide OS-level sandboxing, and the model is not allowed to choose commands but the configured test runner executes the project's tests. Use only trusted repositories and prefer a disposable container/worktree.
