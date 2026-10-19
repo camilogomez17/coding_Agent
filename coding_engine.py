@@ -91,8 +91,17 @@ def _git(root: Path, *args: str, timeout: int = 15) -> subprocess.CompletedProce
 
 
 def _parse_proposal(raw: str) -> tuple[str, list[ProposedChange]]:
+    candidate = raw.strip() if isinstance(raw, str) else raw
+    if isinstance(candidate, str) and candidate.startswith("```") and candidate.endswith("```"):
+        lines = candidate.splitlines()
+        if (
+            len(lines) >= 3
+            and lines[0].strip().lower() in {"```", "```json"}
+            and lines[-1].strip() == "```"
+        ):
+            candidate = "\\n".join(lines[1:-1]).strip()
     try:
-        data = json.loads(raw.strip())
+        data = json.loads(candidate)
     except (TypeError, json.JSONDecodeError) as error:
         raise CodingEngineError("Model response is not valid JSON.") from error
     if not isinstance(data, dict) or not isinstance(data.get("changes"), list):
