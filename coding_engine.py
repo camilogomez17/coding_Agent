@@ -404,7 +404,21 @@ def run_coding_task(
                 _restore(root, targets, originals)
             _git(root, "reset", "--quiet", "--", ".")
             if attempt == max_attempts:
+                # Failed runs should not strand the user on an abandoned task branch.
+                # Only delete it after switching back succeeds, so a cleanup problem
+                # never destroys the branch that still contains the user's checkout.
+                try:
+                    _git(root, "switch", base_branch)
+                    _git(root, "branch", "-D", branch)
+                except Exception as cleanup_error:
+                    raise CodingEngineError(
+                        f"Coding task failed after {attempt} attempt(s): {last_error}. "
+                        f"Failed to clean up task branch {branch!r}; current branch is "
+                        f"{_git(root, 'branch', '--show-current').stdout.strip()!r}: "
+                        f"{type(cleanup_error).__name__}: {str(cleanup_error)[:1000]}"
+                    ) from error
                 raise CodingEngineError(
-                    f"Coding task failed after {attempt} attempt(s) on branch {branch}: {last_error}"
+                    f"Coding task failed after {attempt} attempt(s); returned to "
+                    f"{base_branch!r} and removed failed branch {branch!r}: {last_error}"
                 ) from error
     raise CodingEngineError(f"Coding task failed on branch {branch}: {last_error}")
