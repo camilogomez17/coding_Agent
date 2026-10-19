@@ -68,6 +68,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--allow-path", action="append", default=[],
         help="Restrict every planned step to this exact relative path; repeat to allow multiple files.",
     )
+    plan_parser.add_argument("--adaptive", action="store_true", help="Re-evaluate and revise remaining steps after each verified step.")
     plan_parser.add_argument("objective", nargs="+")
 
     list_parser = task_commands.add_parser("list", help="List queued tasks.")
@@ -168,9 +169,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.task_command == "plan":
             tasks = plan_objective(
                 queue, args.workspace, " ".join(args.objective), publish=args.publish,
-                allowed_paths=args.allow_path or None,
+                allowed_paths=args.allow_path or None, adaptive=args.adaptive,
             )
             print(f"Created plan {tasks[0].plan_id} with {len(tasks)} dependent coding steps.")
+            if args.adaptive:
+                print("Adaptive replanning: enabled after each verified step.")
             for task in tasks:
                 print(f"{task.step_index}. {task.prompt.splitlines()[1]} [{task.id}]")
             return 0
