@@ -8,7 +8,7 @@ A local-first coding-agent runtime for repository inspection, task planning, bou
 - Supports local Ollama and OpenAI-compatible model endpoints.
 - Stores tasks in an atomically written, process-locked JSON queue.
 - Persists task status, attempts, timestamps, errors, results, and an append-only event history.
-- Recovers tasks left running after a process interruption, subject to retry limits.
+- Recovers tasks left running after a process interruption, subject to retry limits; coding tasks checkpoint verified commits so a restart can mark a committed task successful instead of executing it twice.
 - Plans a high-level objective into 2-8 ordered coding steps. Each step waits for the previous step to succeed; downstream steps are marked blocked if a prerequisite fails.
 - Runs read-only diagnostic tasks or restricted coding tasks from the same queue.
 - Runs coding tasks in disposable Git worktrees so file edits and test side effects do not alter the user's checked-out working tree; applies bounded model-proposed changes on a task branch, checks Python syntax, runs pytest when tests are present, rolls back failed proposals, retries within strict limits, and commits verified changes.
@@ -103,7 +103,7 @@ Start the persistent supervisor:
 python agent.py serve
 ```
 
-The supervisor polls the queue every five seconds by default and processes both diagnostic and coding tasks. It recovers interrupted tasks once at startup, records task events, waits when idle, and handles Ctrl-C/SIGTERM by stopping after the active task finishes. `python agent.py task status` shows persisted queue counts and running/pending work. `task pause` prevents new claims while active work finishes; `task resume` resumes claims. `task cancel` marks pending tasks cancelled and asks the supervisor to exit after any active task finishes. These controls are shared through the queue file. The supervisor acquires an exclusive process lock before startup recovery and holds it for the full run; a second supervisor using the same queue fails clearly instead of recovering tasks owned by the first process. For a bounded smoke test:
+The supervisor polls the queue every five seconds by default and processes both diagnostic and coding tasks. It recovers interrupted tasks once at startup, records task events, waits when idle, and handles Ctrl-C/SIGTERM by stopping after the active task finishes. Coding tasks persist a verified-commit checkpoint before optional publication and final queue completion; if the process stops after that checkpoint, startup recovery marks the task successful rather than rerunning its coding attempt. A crash in the narrow interval between Git commit creation and checkpoint persistence may still require manual review. `python agent.py task status` shows persisted queue counts and running/pending work. `task pause` prevents new claims while active work finishes; `task resume` resumes claims. `task cancel` marks pending tasks cancelled and asks the supervisor to exit after any active task finishes. These controls are shared through the queue file. The supervisor acquires an exclusive process lock before startup recovery and holds it for the full run; a second supervisor using the same queue fails clearly instead of recovering tasks owned by the first process. For a bounded smoke test:
 
 ```bash
 python agent.py serve --poll-interval 1 --max-tasks 1
