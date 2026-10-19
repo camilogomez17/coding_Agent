@@ -469,7 +469,12 @@ class TaskQueue:
             data = self._load()
             item = self._find_running(data, task_id)
             item["error"] = error.strip()
-            item["result"] = None
+            has_verified_commit = any(
+                event.get("action") == "verified_commit"
+                for event in item.get("history", [])
+            )
+            if not (item.get("kind") == "code" and item.get("publish") and has_verified_commit):
+                item["result"] = None
             item["status"] = "pending" if retry and item["attempts"] < self.max_attempts else "failed"
             item["updated_at"] = _now()
             item.setdefault("history", []).append(_event("failed", error.strip()))
@@ -516,21 +521,29 @@ class TaskQueue:
                 if committed:
                     commit, branch = committed
                     checkpoint = (
-                        f"Recovered verified commit from Git history.\\n"
-                        f"Branch: {branch}\\nCommit: {commit}\\n"
+                        f"Recovered verified commit from Git history.\n"
+                        f"Branch: {branch}\nCommit: {commit}\n"
                         "Verification: commit was created by the coding engine after verification."
                     )
                     item["result"] = ((item.get("result") or "").rstrip()
-                                      + "\\n" + checkpoint).strip()
-                    item["status"] = "succeeded"
+                                      + "\n" + checkpoint).strip()
+                    item["status"] = "pending" if item.get("publish") else "succeeded"
                     item["error"] = None
-                    detail = "Recovered successful coding task from its stable Git commit identifier."
+                    detail = (
+                        "Recovered verified commit; publication must be retried without rerunning coding."
+                        if item.get("publish") else
+                        "Recovered successful coding task from its stable Git commit identifier."
+                    )
                 elif verified_commit and item.get("result"):
                     # A coding worker can die after its verified commit is saved
-                    # but before the queue transition. Do not execute it again.
-                    item["status"] = "succeeded"
+                    # but before publication or the queue transition.
+                    item["status"] = "pending" if item.get("publish") else "succeeded"
                     item["error"] = None
-                    detail = "Recovered completed coding task from its verified-commit checkpoint."
+                    detail = (
+                        "Verified commit recovered; retry publication without rerunning coding."
+                        if item.get("publish") else
+                        "Recovered completed coding task from its verified-commit checkpoint."
+                    )
                 elif item["attempts"] < self.max_attempts:
                     item["status"] = "pending"
                     item["error"] = "Requeued after an interrupted run."
