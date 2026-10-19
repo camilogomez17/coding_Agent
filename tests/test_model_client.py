@@ -56,7 +56,16 @@ def test_local_mode_posts_to_ollama_and_returns_content(monkeypatch):
         {"role": "user", "content": "Explain this code"},
     ]
     assert seen["payload"]["stream"] is False
-    assert seen["payload"]["format"] == "json"
+    schema = seen["payload"]["format"]
+    assert schema == model_client.PROPOSAL_SCHEMA
+    assert schema["type"] == "object"
+    assert schema["required"] == ["summary", "changes"]
+
+    change_schema = schema["properties"]["changes"]["items"]
+    assert change_schema["required"] == ["path", "content"]
+    assert change_schema["properties"]["path"]["type"] == "string"
+    assert change_schema["properties"]["content"]["type"] == "string"
+    assert change_schema["properties"]["reason"]["type"] == "string"
     assert seen["timeout"] == 3
 
 
