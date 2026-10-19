@@ -140,3 +140,34 @@ def test_publish_preference_persists_for_tasks_and_plans(tmp_path):
     plan_tasks = [item for item in tasks if item.plan_id == plan[0].plan_id]
     assert len(plan_tasks) == 2
     assert all(item.publish for item in plan_tasks)
+
+def test_purge_failed_removes_terminal_failures_but_preserves_other_tasks(tmp_path):
+    queue = TaskQueue(tmp_path / "tasks.json", max_attempts=1)
+    failed = queue.enqueue("Known failed task", tmp_path)
+    queue.claim_next()
+    queue.fail(failed.id, "Permanent failure", retry=False)
+
+    successful = queue.enqueue("Successful task", tmp_path)
+    queue.claim_next()
+    queue.complete(successful.id, result="Done")
+
+    assert queue.purge_failed() == 1
+    assert queue.list_tasks() == [queue.list_tasks()[0]]
+    assert queue.list_tasks()[0].id == successful.id
+
+
+def test_purge_failed_refuses_to_break_live_task_dependencies(tmp_path):
+    queue = TaskQueue(tmp_path / "tasks.json", max_attempts=1)
+    plan = queue.enqueue_plan("Plan", tmp_path, ["First step", "Second step"])
+    first = queue.claim_next()
+    queue.fail(first.id, "First step failed", retry=False)
+
+    with pytest.raises(QueueError, match="depend on them"):
+        queue.purge_failed()
+
+    tasks = queue.list_tasks()
+    assert len(tasks) == 2
+    assert tasks[0].status == "failed"
+    assert tasks[1].status == "pending"
+    assert tasks[1].depends_on == plan[0].id
+
