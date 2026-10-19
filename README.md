@@ -1,6 +1,6 @@
 # coding_Agent
 
-An incremental, testable foundation for a local-first coding agent.
+An incremental, local-first coding-agent runtime for inspecting repositories and diagnosing queued tasks with a language model.
 
 ## Current capabilities
 
@@ -9,10 +9,12 @@ An incremental, testable foundation for a local-first coding agent.
 - Provides a dependency-free model client for Ollama and OpenAI-compatible chat APIs.
 - In hybrid mode, tries Ollama first and falls back to the configured cloud API if local inference fails.
 - Persists tasks in a JSON queue with atomic writes, process locking, retry limits, and interrupted-task recovery.
-- Provides a CLI for repository inspection, model prompts, and task queue management.
+- Builds bounded repository context from project files, Git status, and a deterministic file inventory.
+- Excludes common secret files, generated directories, symlinks, binary files, and oversized files from model context.
+- Runs one queued task at a time as a read-only model-assisted diagnostic and persists the report in the queue.
 - Runs the test suite in GitHub Actions on pushes to `main` and pull requests targeting `main`.
 
-**Important:** this is not yet an autonomous 24/7 coding agent. Tasks can be queued and model prompts can be sent, but the agent does not yet turn queued tasks into repository edits or run a persistent worker loop. Do not expect unattended code changes yet.
+**Important:** this is not yet an autonomous 24/7 coding agent. The diagnostic worker can inspect context and save reports, but it does not edit project files, run arbitrary model-requested commands, or continuously process tasks in the background.
 
 ## Requirements
 
@@ -32,7 +34,7 @@ python -m pip install pytest
 python -m pytest -q
 ```
 
-## Configure hybrid inference on an Apple Silicon Mac with 16 GB memory
+## Configure local inference on an Apple Silicon Mac with 16 GB memory
 
 Install Ollama from https://ollama.com, then download a coding model that fits your memory budget:
 
@@ -40,36 +42,33 @@ Install Ollama from https://ollama.com, then download a coding model that fits y
 ollama pull qwen2.5-coder:7b
 ```
 
-Ensure Ollama is running. In hybrid mode, local inference is attempted first. A cloud request is made only if the local request fails and a cloud API key is configured.
+For local-only inference without an API key:
 
 ```bash
-export AGENT_MODEL_MODE=hybrid
+export AGENT_MODEL_MODE=local
 export AGENT_LOCAL_MODEL=qwen2.5-coder:7b
 export AGENT_OLLAMA_URL=http://127.0.0.1:11434
-export OPENAI_API_KEY='your-api-key'
 ```
 
-The client defaults to the OpenAI API at `https://api.openai.com/v1` and model `gpt-4.1-mini`. You can configure a compatible provider with `AGENT_CLOUD_URL` and `AGENT_CLOUD_MODEL`. Keep API keys in environment variables or a local secrets manager; never commit them.
+Hybrid mode tries local inference first. It can send prompts and repository context to a configured cloud provider if local inference fails and a cloud API key is available. The client defaults to the OpenAI API at `https://api.openai.com/v1` and model `gpt-4.1-mini`. Configure compatible providers with `AGENT_CLOUD_URL` and `AGENT_CLOUD_MODEL`. Never commit API keys.
 
-**Privacy:** hybrid fallback can send the prompt and supplied context to the cloud provider. Do not include secrets or proprietary code unless you have explicitly decided that provider may receive them. Local-only mode never intentionally calls the cloud endpoint.
+**Privacy:** the context builder excludes common secret-file names and directories, but cannot guarantee detection of secrets embedded in ordinary source files. Prefer local-only mode for private repositories. Cloud fallback can transmit supplied context to the configured provider.
 
 ## CLI examples
 
-Run commands from the repository root with your virtual environment activated.
-
-Inspect a project (read-only):
+Run read-only repository checks:
 
 ```bash
 python agent.py inspect /path/to/project
 ```
 
-Send a prompt to the configured model:
+Send a prompt directly to the configured model:
 
 ```bash
 python agent.py ask "Explain the architecture of this project"
 ```
 
-Queue a task for a project. This records the task; it does not execute it yet:
+Queue a task for a project. This records the task without executing it:
 
 ```bash
 python agent.py task add --workspace /path/to/project "Find likely bugs and suggest fixes"
@@ -77,7 +76,21 @@ python agent.py task list
 python agent.py task list --status pending
 ```
 
-Queue state is stored by default in `~/.coding_agent/tasks.json`. Override it with `AGENT_QUEUE_PATH` if needed. The `task recover` command should only be used after confirming that no other supervisor is actively processing the same queue.
+Run one pending task as a read-only diagnostic using the configured model:
+
+```bash
+python agent.py task diagnose
+```
+
+The command claims at most one pending task, builds a bounded repository context, asks the model for a diagnosis, and stores the report in the queue. It never applies edits or executes commands requested by the model. If inference fails, the task is retried within the queue's attempt limit.
+
+View the saved result using the task ID printed by `task diagnose`:
+
+```bash
+python agent.py task show TASK_ID
+```
+
+Queue state is stored by default in `~/.coding_agent/tasks.json`. Override it with `AGENT_QUEUE_PATH`. The `task recover` command should only be used after confirming that no other supervisor is actively processing the same queue.
 
 ## Model client settings
 
@@ -96,8 +109,8 @@ The Python model interface is `ModelClient().generate(prompt, system=None)` in `
 
 ## Planned development sequence
 
-1. Model client, CLI, durable queue, and repeatable checks (current foundation).
-2. Read-only project context builder and diagnostic reports.
+1. Model client, CLI, durable queue, and repeatable checks.
+2. Bounded read-only repository context and diagnostic reports (implemented).
 3. Restricted edit worker with diff review and verification.
 4. A single-task worker loop with retry budgets, cancellation, and run history.
 5. Resource limits, process supervision, and safe restart behavior.
