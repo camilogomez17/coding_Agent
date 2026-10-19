@@ -4,11 +4,39 @@ from __future__ import annotations
 from typing import Any
 
 from coding_engine import run_coding_task
-from git_workflow import GitPublishError, publish_branch
+from git_workflow import GitPublishError, publish_branch, publish_existing_branch
 from model_client import ModelClient
 from planner import adapt_completed_step
 from task_queue import Task, TaskQueue
 from workspace_isolation import isolated_worktree
+
+
+def _report_field(report: str, name: str) -> str:
+    prefix = f"{name}:"
+    for line in report.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):].strip()
+    return ""
+
+
+def _complete_with_adaptation(queue: TaskQueue, task: Task, report: str, model_client: Any | None) -> Task:
+    completed = queue.complete(task.id, result=report)
+    if task.adaptive_plan:
+        try:
+            revised = adapt_completed_step(
+                queue, completed, report, model_client=model_client
+            )
+            note = f"Adaptive replanning: {len(revised)} remaining step(s) queued."
+            queue.annotate_task(task.id, note, action="plan_revised")
+        except Exception as planning_error:
+            queue.annotate_task(
+                task.id,
+                "Adaptive replanning failed; the existing queued plan remains "
+                f"unchanged: {type(planning_error).__name__}: {planning_error}",
+                action="plan_revision_failed",
+            )
+        completed = next(item for item in queue.list_tasks() if item.id == task.id)
+    return completed
 
 
 def run_next_coding_task(
@@ -23,6 +51,40 @@ def run_next_coding_task(
     if task is None:
         return None
     try:
+        has_verified_commit = any(
+            event.get("action") == "verified_commit" for event in task.history
+        )
+        if task.kind == "code" and task.publish and task.result and has_verified_commit:
+            branch = _report_field(task.result, "Branch")
+            base_branch = _report_field(task.result, "Base branch")
+            commit = _report_field(task.result, "Commit")
+            if not branch or not commit:
+                raise GitPublishError(
+                    "Verified commit checkpoint lacks the branch or commit hash needed to retry publication."
+                )
+            summary = _report_field(task.result, "Summary") or task.prompt
+            raw_files = _report_field(task.result, "Changed files")
+            changed_files = tuple(
+                path.strip() for path in raw_files.split(",") if path.strip()
+            )
+            pull_request_url = publish_existing_branch(
+                task.workspace,
+                branch=branch,
+                base_branch=base_branch,
+                title=f"Agent: {summary.strip()}",
+                summary=summary,
+                commit=commit,
+                changed_files=changed_files,
+            )
+            report = task.result.rstrip() + f"\nPull request: {pull_request_url}"
+            queue.annotate_task(
+                task.id, f"Publication succeeded: {pull_request_url}",
+                action="published",
+            )
+            # annotate_task may append to result; use its persisted result when completing.
+            current = next(item for item in queue.list_tasks() if item.id == task.id)
+            report = current.result or report
+            return _complete_with_adaptation(queue, task, report, model_client)
         with isolated_worktree(task.workspace) as (worktree, base_branch):
             checkpoint_saved = [False]
 
@@ -76,23 +138,7 @@ def run_next_coding_task(
                     report += f"\nPull request: {pull_request_url}"
                 except GitPublishError as publish_error:
                     report += f"\nPublish failed: {publish_error}"
-        completed = queue.complete(task.id, result=report)
-        if task.adaptive_plan:
-            try:
-                revised = adapt_completed_step(
-                    queue, completed, report, model_client=model_client
-                )
-                note = f"Adaptive replanning: {len(revised)} remaining step(s) queued."
-                queue.annotate_task(task.id, note, action="plan_revised")
-            except Exception as planning_error:
-                queue.annotate_task(
-                    task.id,
-                    "Adaptive replanning failed; the existing queued plan remains "
-                    f"unchanged: {type(planning_error).__name__}: {planning_error}",
-                    action="plan_revision_failed",
-                )
-            completed = next(item for item in queue.list_tasks() if item.id == task.id)
-        return completed
+        return _complete_with_adaptation(queue, task, report, model_client)
     except Exception as error:
         reason = f"{type(error).__name__}: {error}"
         return queue.fail(task.id, reason[:1000], retry=True)
