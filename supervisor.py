@@ -1,13 +1,36 @@
 """Persistent supervisor loop for queued diagnosis and coding tasks."""
 from __future__ import annotations
 
+import fcntl
 import signal
 import threading
-from typing import Callable
+from contextlib import contextmanager
+from typing import Callable, Iterator
 
 from coding_worker import run_next_coding_task
 from diagnostic_worker import run_next_diagnostic
 from task_queue import Task, TaskQueue
+
+
+class SupervisorAlreadyRunning(RuntimeError):
+    pass
+
+
+@contextmanager
+def _supervisor_lock(queue: TaskQueue) -> Iterator[None]:
+    lock_path = queue.path.with_suffix(queue.path.suffix + ".supervisor.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise SupervisorAlreadyRunning(
+                f"Another supervisor already owns queue: {queue.path}"
+            ) from error
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def run_next_task(queue: TaskQueue) -> Task | None:
@@ -20,7 +43,7 @@ def run_next_task(queue: TaskQueue) -> Task | None:
     return run_next_diagnostic(queue, claimed_task=task)
 
 
-def run_supervisor(
+def _run_supervisor_locked(
     queue: TaskQueue,
     *,
     poll_interval: float = 5.0,
@@ -60,6 +83,20 @@ def run_supervisor(
             break
     return processed
 
+
+def run_supervisor(
+    queue: TaskQueue, *, poll_interval: float = 5.0, max_tasks: int | None = None,
+    stop_event: threading.Event | None = None, recover: bool = True,
+    on_task: Callable[[Task], None] | None = None,
+) -> int:
+    stop = stop_event or threading.Event()
+    if stop.is_set():
+        return 0
+    with _supervisor_lock(queue):
+        return _run_supervisor_locked(
+            queue, poll_interval=poll_interval, max_tasks=max_tasks,
+            stop_event=stop, recover=recover, on_task=on_task,
+        )
 
 def install_signal_handlers(stop_event: threading.Event) -> Callable[[], None]:
     """Install SIGINT/SIGTERM handlers; restore the original handlers on exit."""
