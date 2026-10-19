@@ -87,10 +87,11 @@ Plan a high-level coding objective into ordered, dependent tasks:
 python agent.py task plan --workspace /path/to/project "Add import sorting and tests"
 python agent.py task plan --workspace /path/to/project --publish "Add import sorting and tests"
 python agent.py task plan --workspace /path/to/project --allow-path parser.py --allow-path tests/test_parser.py "Improve the parser"
+python agent.py task plan --workspace /path/to/project --adaptive "Build a parser with tests"
 python agent.py task list
 ```
 
-The planner uses the configured model to produce 2-8 bounded steps. Repeat `--allow-path` to enforce the same exact relative-path allowlist on every generated step. Steps are queued atomically and executed in order. A step does not become eligible until its predecessor succeeds; a permanently failed prerequisite blocks later steps. Review generated plans before letting them run.
+The planner uses the configured model to produce 2-8 bounded steps. Repeat `--allow-path` to enforce the same exact relative-path allowlist on every generated step. Steps are queued atomically and executed in order. Add `--adaptive` to have the planner evaluate each verified step and replace only the unstarted tail based on the actual result; it may shorten the plan if the objective is already complete. If adaptive planning fails, the existing queued plan is preserved and the failure is recorded in the completed task history. A step does not become eligible until its predecessor succeeds; a permanently failed prerequisite blocks later steps. Review generated plans before letting them run.
 
 Start the persistent supervisor:
 
