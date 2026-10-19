@@ -167,3 +167,23 @@ def test_engine_does_not_create_branch_if_model_setup_fails(tmp_path, monkeypatc
     assert git(root, "branch", "--list", "agent/task-*").stdout.strip() == ""
     assert git(root, "status", "--porcelain").stdout.strip() == ""
 
+
+
+def test_engine_accepts_detached_worktree_with_explicit_base_branch(tmp_path):
+    root = make_repo(tmp_path)
+    base_commit = git(root, "rev-parse", "HEAD").stdout.strip()
+    git(root, "switch", "--detach", base_commit)
+    model = FakeModel(proposal("app.py", "answer = 2\n", "Update answer"))
+
+    result = run_coding_task(
+        root,
+        "Update answer",
+        model,
+        max_attempts=1,
+        base_branch_override="main",
+    )
+
+    assert result.base_branch == "main"
+    assert result.branch.startswith("agent/task-update-answer-")
+    assert git(root, "branch", "--show-current").stdout.strip() == result.branch
+    assert git(root, "show-ref", "--verify", "refs/heads/main").stdout.strip()

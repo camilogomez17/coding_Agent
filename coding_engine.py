@@ -442,7 +442,12 @@ def run_coding_task(
                 # Only delete it after switching back succeeds, so a cleanup problem
                 # never destroys the branch that still contains the user's checkout.
                 try:
-                    _git(root, "switch", base_branch)
+                    if base_branch_override:
+                        # In a disposable worktree the base branch is checked out
+                        # in the source repository, so detach at its commit instead.
+                        _git(root, "switch", "--detach", base_branch)
+                    else:
+                        _git(root, "switch", base_branch)
                     _git(root, "branch", "-D", branch)
                 except Exception as cleanup_error:
                     raise CodingEngineError(
