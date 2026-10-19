@@ -10,7 +10,7 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from model_client import ModelClient
 from project_context import ProjectContextError, build_project_context
@@ -328,6 +328,7 @@ def run_coding_task(
     max_attempts: int = MAX_ATTEMPTS,
     allowed_paths: list[str] | tuple[str, ...] | set[str] | None = None,
     base_branch_override: str | None = None,
+    on_verified_commit: Callable[[CodingResult], None] | None = None,
 ) -> CodingResult:
     """Propose, validate, test, and commit changes on a newly-created Git branch."""
     if not isinstance(prompt, str) or not prompt.strip():
@@ -423,7 +424,7 @@ def run_coding_task(
             )
             _git(root, "commit", "-m", f"agent: {subject}")
             commit = _git(root, "rev-parse", "HEAD").stdout.strip()
-            return CodingResult(
+            result = CodingResult(
                 branch,
                 base_branch,
                 commit,
@@ -432,6 +433,14 @@ def run_coding_task(
                 attempt,
                 test_output,
             )
+            if on_verified_commit is not None:
+                # Checkpoint immediately after commit creation. Callback failures
+                # must not turn an already committed change into a failed attempt.
+                try:
+                    on_verified_commit(result)
+                except Exception:
+                    pass
+            return result
         except Exception as error:
             last_error = f"{type(error).__name__}: {str(error)[:5000]}"
             if targets and originals:
