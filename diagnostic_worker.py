@@ -30,8 +30,8 @@ def run_next_diagnostic(
     if task is None:
         return None
 
-    client = model_client or ModelClient()
     try:
+        client = model_client or ModelClient()
         context = build_project_context(task.workspace)
         prompt = (
             "User's diagnostic task:\n"
