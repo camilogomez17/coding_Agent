@@ -40,13 +40,13 @@ def _find_task_commit(workspace: str, task_id: str) -> tuple[str, str] | None:
         if not root.is_dir():
             return None
         log = subprocess.run(
-            ["git", "log", "--all", "--format=%H%x09%B"],
+            ["git", "log", "--all", "--format=%H%x09%B%x00"],
             cwd=root, capture_output=True, text=True, timeout=10, check=False,
         )
         if log.returncode:
             return None
         trailer = f"Coding-Agent-Task: {task_id}"
-        for entry in log.stdout.split("\\n\\n"):
+        for entry in log.stdout.split("\\x00"):
             header, separator, body = entry.partition("\\t")
             if not separator or not header.strip():
                 continue
