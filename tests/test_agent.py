@@ -176,3 +176,23 @@ def test_task_add_persists_explicit_allowed_paths(tmp_path, monkeypatch, capsys)
     task = TaskQueue(queue_path).list_tasks()[0]
     assert task.allowed_paths == ["coding_engine.py", "tests/test_coding_engine.py"]
 
+def test_task_purge_failed_requires_confirmation_and_deletes_failed_records(
+    tmp_path, monkeypatch, capsys
+):
+    queue_path = tmp_path / "tasks.json"
+    monkeypatch.setenv("AGENT_QUEUE_PATH", str(queue_path))
+    queue = TaskQueue(queue_path, max_attempts=1)
+    task = queue.enqueue("Failed task", tmp_path)
+    queue.claim_next()
+    queue.fail(task.id, "Failure", retry=False)
+
+    result = agent.main(["task", "purge-failed"])
+    assert result == 1
+    assert "Confirm deletion with --yes" in capsys.readouterr().err
+    assert len(TaskQueue(queue_path).list_tasks()) == 1
+
+    result = agent.main(["task", "purge-failed", "--yes"])
+    assert result == 0
+    assert "Deleted 1 failed task record(s)." in capsys.readouterr().out
+    assert TaskQueue(queue_path).list_tasks() == []
+
