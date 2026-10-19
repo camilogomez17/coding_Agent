@@ -137,7 +137,11 @@ def run_next_coding_task(
                     )
                     report += f"\nPull request: {pull_request_url}"
                 except GitPublishError as publish_error:
-                    report += f"\nPublish failed: {publish_error}"
+                    reason = f"Publication failed: {publish_error}"
+                    queue.annotate_task(
+                        task.id, reason, action="publication_failed"
+                    )
+                    return queue.fail(task.id, reason[:1000], retry=True)
         return _complete_with_adaptation(queue, task, report, model_client)
     except Exception as error:
         reason = f"{type(error).__name__}: {error}"
