@@ -203,10 +203,10 @@ def test_task_plan_passes_allowlist_to_all_planned_steps(tmp_path, monkeypatch, 
     monkeypatch.setenv("AGENT_QUEUE_PATH", str(queue_path))
     seen = {}
 
-    def fake_plan(queue, workspace, objective, *, publish=False, allowed_paths=None):
+    def fake_plan(queue, workspace, objective, *, publish=False, allowed_paths=None, adaptive=False):
         seen.update(
             queue=queue, workspace=workspace, objective=objective,
-            publish=publish, allowed_paths=allowed_paths,
+            publish=publish, allowed_paths=allowed_paths, adaptive=adaptive,
         )
         return [
             SimpleNamespace(plan_id="plan-1", step_index=1, id="task-1", prompt="Overall objective: Improve the parser\nPlan step 1/2: first"),
@@ -217,7 +217,7 @@ def test_task_plan_passes_allowlist_to_all_planned_steps(tmp_path, monkeypatch, 
     result = agent.main([
         "task", "plan", "--workspace", str(tmp_path),
         "--allow-path", "src/parser.py",
-        "--allow-path", "tests/test_parser.py",
+        "--allow-path", "tests/test_parser.py", "--adaptive",
         "Improve", "the", "parser",
     ])
 
@@ -225,4 +225,5 @@ def test_task_plan_passes_allowlist_to_all_planned_steps(tmp_path, monkeypatch, 
     assert seen["workspace"] == str(tmp_path)
     assert seen["objective"] == "Improve the parser"
     assert seen["allowed_paths"] == ["src/parser.py", "tests/test_parser.py"]
+    assert seen["adaptive"] is True
     assert "Created plan plan-1 with 2 dependent coding steps." in capsys.readouterr().out
